@@ -277,7 +277,9 @@ url = "http://${INGRESS_GW_ADDRESS}/mcp"
 EOF
 ```
 
-No token or secret goes in this file.
+No token or secret goes in this file. If you added the two blocks that make Claude models work
+(see [Other models](../README.md#other-models)), add them again at the end, because this command
+replaces the file.
 
 ## Step 7 — Sign in for the model
 
@@ -435,6 +437,9 @@ Only the first row and the `route not found` row were hit while building this gu
   group ID there to give the MCP server a different audience than the model.
 - **Prompts are stored in plain text.** With prompt logging on, every prompt and answer is in Postgres
   next to the user's sign-in name. Set `llm: metadata` in `k8s/04-gateway-parameters.yaml` to stop that.
+- **The sign-in covers every published model.** `gpt-oss-20b` and `claude-haiku-4-5` from
+  `k8s/07-more-bedrock-models.yaml` sit behind the same policy; `codex -m claude-haiku-4-5` uses the
+  same sign-in.
 - **Traffic is still plain HTTP** between Codex and the gateway on your machine. The token is a bearer
   credential; for anything beyond local use, put TLS on the listener.
 - **Alternative without a browser sign-in in Codex.** Codex can instead run a command that prints a
