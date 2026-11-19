@@ -1,0 +1,21 @@
+{
+  "name": "agentgateway-oss-k8s",
+  "version": "1.0.0",
+  "description": "Screenshot tooling for the agentgateway UI",
+  "scripts": {
+    "screenshots": "node scripts/screenshots.mjs"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/sebbycorp/agentgateway-oss-k8s.git"
+  },
+  "type": "module",
+  "bugs": {
+    "url": "https://github.com/sebbycorp/agentgateway-oss-k8s/issues"
+  },
+  "homepage": "https://github.com/sebbycorp/agentgateway-oss-k8s#readme",
+  "private": "true",
+  "devDependencies": {
+    "playwright": "^1.65.1"
+  }
+}

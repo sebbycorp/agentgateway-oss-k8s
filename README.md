@@ -10,6 +10,8 @@ codex CLI ──► localhost:<port> ──► cloud-provider-kind (envoy) ─�
                                                                        └─ logs   ──► Postgres ──► UI Logs / Analytics
 ```
 
+![agentgateway UI Logs page showing Codex calls routed to Bedrock](docs/screenshots/logs.png)
+
 Based on:
 
 - LLM quickstart (models): <https://agentgateway.dev/docs/kubernetes/latest/quickstart/llm/>
@@ -369,6 +371,26 @@ or config option that changes this in v1.7.0. The pages still work — open them
 - <http://localhost:15000/ui/llm/logs> — each LLM call: model, tokens, duration, cost
 - <http://localhost:15000/ui/llm/analytics> — traffic by model, user, provider
 - <http://localhost:15000/ui/llm/costs> — the built-in pricing catalog
+
+| Logs (`/ui/llm/logs`) | Analytics (`/ui/llm/analytics`) |
+|---|---|
+| ![Logs page listing each LLM call with model, tokens, duration and cost](docs/screenshots/logs.png) | ![Analytics page charting tokens, calls and cost over time](docs/screenshots/analytics.png) |
+
+| Models | Routes |
+|---|---|
+| ![Models page showing gpt-oss-120b](docs/screenshots/models.png) | ![Routes page showing the MCP and LLM routes](docs/screenshots/routes.png) |
+
+| Home (note the "Readonly mode" banner and short sidebar) | Costs (`/ui/llm/costs`) |
+|---|---|
+| ![Gateway overview in read-only mode](docs/screenshots/home.png) | ![Costs page using the embedded pricing catalog](docs/screenshots/costs.png) |
+
+The screenshots are generated with Playwright. To refresh them, keep the port-forward above running and:
+
+```sh
+npm install
+npx playwright install chromium
+npm run screenshots        # writes docs/screenshots/*.png
+```
 
 Or query the database directly:
 
