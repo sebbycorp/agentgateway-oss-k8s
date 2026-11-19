@@ -150,8 +150,11 @@ sed "s/\${PG_PASSWORD}/$PG_PASSWORD/" k8s/04-gateway-parameters.yaml | kubectl -
 Notes:
 
 - The database setting is read at startup only; changing it restarts the proxy.
-- By default only metadata is stored (model, tokens, cost, latency, status, client). Prompt and
-  completion text is **not** stored. Storing it is a separate access-log setting (`database.llm: full`).
+- **Prompt logging is on.** `k8s/04-gateway-parameters.yaml` sets
+  `frontendPolicies.accessLog.database.llm: full`, so the prompt and completion text of every call is
+  stored in Postgres (table `request_log_payloads`) and shown under each entry on the Logs page. Change
+  it to `metadata` to keep only model, tokens, cost, latency, status and client. The UI's
+  *Log settings* panel cannot change this on Kubernetes (read-only mode); the file is the way.
 - The password ends up in plain text inside the `AgentgatewayParameters` resource and the proxy's
   ConfigMap, because `rawConfig` has no Secret reference. Restrict read access to that namespace.
 - No retention or pruning setting is documented; the `request_logs` table grows until you prune it.
@@ -672,7 +675,18 @@ Now `codex` always goes through the gateway and asks for an Entra sign-in when i
 `command codex` to run Codex without the profile. (The alternative is to put the profile's settings in
 `~/.codex/config.toml`, but that file is shared with the ChatGPT desktop app.)
 
-Each request log row records who made the call (`agentgateway_user` is the token's `sub` claim):
+### J. Show the sign-in name in the logs
+
+By default the logs identify the user by the token's `sub` claim, an opaque ID. Tell the proxy to use
+the sign-in name instead (the proxy restarts; rerun the UI port-forward from Step 13):
+
+```sh
+kubectl --context $CTX -n agentgateway-system patch agentgatewayparameters agentgateway-proxy-params \
+  --type merge -p '{"spec":{"rawConfig":{"config":{"standardAttributes":{"user":"jwt.preferred_username"}}}}}'
+kubectl --context $CTX -n agentgateway-system rollout status deploy/agentgateway-proxy
+```
+
+Each request log row now records who made the call, next to the prompt (see Step 5):
 
 ```sh
 kubectl --context $CTX -n agentgateway-system exec agentgateway-db-0 -- \

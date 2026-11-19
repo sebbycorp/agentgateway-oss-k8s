@@ -11,3 +11,9 @@ spec:
     config:
       database:
         url: "postgres://agentgateway:${PG_PASSWORD}@agentgateway-db.agentgateway-system.svc.cluster.local:5432/agentgateway"
+    # Store prompt and completion text with each request log ("full").
+    # Use "metadata" to keep only model, tokens, timing and cost.
+    frontendPolicies:
+      accessLog:
+        database:
+          llm: full
