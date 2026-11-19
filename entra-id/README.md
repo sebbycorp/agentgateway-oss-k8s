@@ -156,9 +156,6 @@ The portal steps were not run for this guide; the commands above were.
 
 </details>
 
-Shortcut for Steps 1 and 2: [`scripts/entra-setup.sh`](../scripts/entra-setup.sh) runs the same commands,
-reuses objects that already exist, and prints the `export` lines.
-
 ## Step 3 — Check the token
 
 It can take a minute after Step 2 before Entra issues the token.
