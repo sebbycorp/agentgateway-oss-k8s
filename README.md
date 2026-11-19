@@ -45,6 +45,7 @@ Based on:
 | Model `gpt-oss-120b` (OpenAI on Bedrock) | manifest `k8s/02-model-bedrock-openai.yaml` | Step 7 |
 | MCP server `search.solo.io` at `/mcp` | manifest `k8s/05-mcp-solo-search.yaml` | Step 12 |
 | Codex profile | `~/.codex/agentgateway.config.toml` | Steps 10 and 12 |
+| *Optional:* models `gpt-oss-20b` and `claude-haiku-4-5` | manifest `k8s/07-more-bedrock-models.yaml` | [Other models](#other-models) |
 | *Optional:* Entra ID sign-in + group check | manifest `k8s/06-entra-auth.yaml` | [Optional section](entra-id/README.md) |
 
 Secrets (`bedrock-secret`, `agentgateway-db`) are created from the command line and are not stored in
@@ -416,16 +417,52 @@ and the MCP server, and showing the signed-in user in the logs.
 
 ## Other models
 
-Also tested through this gateway, and not currently published:
+[`k8s/07-more-bedrock-models.yaml`](k8s/07-more-bedrock-models.yaml) publishes two more Bedrock models
+next to `gpt-oss-120b`. They use the same `bedrock-secret` and region:
 
-| Model | Result |
-|---|---|
-| OpenAI direct (`gpt-5.5`, `gpt-6.2-sol`) with `provider: OpenAI` and an `openai-secret` | works with Codex |
-| Bedrock `openai.gpt-oss-20b-1:0` | works over curl; Codex not tested |
-| Bedrock `us.anthropic.claude-haiku-4-5-20251001-v1:0` | works over curl; Codex fails with HTTP 400 (`tools.N.custom.input_schema: input_schema does not support oneOf, allOf, or anyOf at the top level`) |
+```sh
+kubectl --context $CTX apply -f k8s/07-more-bedrock-models.yaml
+codex --profile agentgateway -m claude-haiku-4-5      # or: -m gpt-oss-20b
+```
 
-To add one, copy `k8s/02-model-bedrock-openai.yaml`, change `metadata.name` and the model ID in the
-transformation.
+| Name in Codex | Bedrock model | Result with Codex |
+|---|---|---|
+| `gpt-oss-120b` | `openai.gpt-oss-120b-1:0` | works: chat, shell commands, MCP tools |
+| `gpt-oss-20b` | `openai.gpt-oss-20b-1:0` | works: chat, shell commands, MCP tools. Sometimes prints its reasoning in front of the answer |
+| `claude-haiku-4-5` | `us.anthropic.claude-haiku-4-5-20251001-v1:0` | works: chat, shell commands, MCP tools, after the change below |
+
+**Claude models need two Codex tools turned off if you have the ChatGPT desktop app installed.** The app
+adds two JavaScript REPL tools to Codex (`cua_repl` from the `unified-computer-use` plugin, and
+`node_repl`). Their schemas use a top-level `oneOf`, which Claude on Bedrock rejects for the whole
+request:
+
+```
+HTTP 400: tools.12.custom.input_schema: input_schema does not support oneOf, allOf, or anyOf at the top level
+```
+
+Turn them off for the gateway profile only. Add each block only if `codex mcp list` shows that server,
+otherwise Codex refuses to load the profile:
+
+```sh
+cat >> ~/.codex/agentgateway.config.toml <<'EOF'
+
+# Claude on Bedrock rejects the schema of these two desktop-app tools.
+[plugins."unified-computer-use@openai-bundled"]
+enabled = false
+
+[mcp_servers.node_repl]
+enabled = false
+EOF
+```
+
+Any other MCP tool whose schema has `oneOf`, `anyOf` or `allOf` at the top level causes the same error
+with Claude models. The OpenAI models on Bedrock accept them.
+
+OpenAI direct (`gpt-5.5`, `gpt-6.2-sol`) with `provider: OpenAI` and an `openai-secret` was also tested
+with Codex earlier and worked; it is not in a manifest here.
+
+To add another model, copy a block in `k8s/07-more-bedrock-models.yaml` and change `metadata.name` and
+the model ID in the transformation.
 
 ## Things to know
 
