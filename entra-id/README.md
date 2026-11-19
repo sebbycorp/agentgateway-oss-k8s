@@ -50,7 +50,7 @@ and the tenant, app and group IDs are filled into the manifest at apply time.
 
   ```sh
   export CTX=kind-agentgateway-codex
-  echo $INGRESS_GW_ADDRESS        # e.g. localhost:60597, from Step 8
+  echo $INGRESS_GW_ADDRESS        # e.g. localhost:8080, from Step 8
   ```
 
 - The Azure CLI (`az`), signed in as a user who may create groups and app registrations. It is only
@@ -333,7 +333,7 @@ codex --profile agentgateway mcp login solo-search
 
 codex --profile agentgateway mcp list
 # Name         Url                         ...  Status   Auth
-# solo-search  http://localhost:60597/mcp  ...  enabled  OAuth
+# solo-search  http://localhost:8080/mcp  ...  enabled  OAuth
 ```
 
 Test the model and the MCP server together:
@@ -430,9 +430,9 @@ Only the first row and the `route not found` row were hit while building this gu
   `~/.codex/secrets/gateway_oauth.age`; the next run asks you to sign in again.
 - **Group changes take up to an hour.** Membership is read when the token is issued. After adding or
   removing someone, their current token keeps working until it expires.
-- **The MCP callback ID changes when the gateway address changes.** With `--enable-lb-port-mapping` the
-  port is random per run, so after restarting cloud-provider-kind redo Step 6 and Step 8. A fixed
-  address avoids this: see the stable-port alternative in the main README.
+- **The MCP callback ID changes when the gateway address changes.** With the fixed `localhost:8080`
+  from the main README it stays the same. If you use a cloud-provider-kind port instead, it is random
+  per run, so after restarting cloud-provider-kind redo Step 6 and Step 8.
 - **More than 200 groups.** Entra leaves the `groups` claim out of the token for such users and the
   policy answers 403. Fix: in the app's *Token configuration*, emit only *Groups assigned to the
   application*, and assign the group to the app's enterprise application.

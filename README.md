@@ -1,14 +1,23 @@
-# Codex CLI through agentgateway on kind
+# Codex CLI and Claude Code through agentgateway on kind
 
-Routes OpenAI Codex CLI traffic through [agentgateway](https://agentgateway.dev/docs/kubernetes/latest/) running in a local kind cluster. The gateway holds the Bedrock API key and serves OpenAI's `gpt-oss-120b` from Amazon Bedrock; Codex talks to the gateway with no key of its own.
+Routes coding-agent traffic through [agentgateway](https://agentgateway.dev/docs/kubernetes/latest/) running in a local kind cluster. The gateway holds the Amazon Bedrock API key and publishes Bedrock models; the clients talk to the gateway with no key of their own.
+
+| Client | Models (all on Amazon Bedrock) | Guide |
+|---|---|---|
+| OpenAI Codex CLI | `gpt-oss-120b`, `gpt-oss-20b`, `claude-haiku-4-5` | this page |
+| Claude Code | Claude Opus, Sonnet and Haiku 5.5 | [claude-code/README.md](claude-code/README.md) |
 
 ```
-codex CLI ──► localhost:<port> ──► cloud-provider-kind (envoy) ──► agentgateway-proxy
- (no API key)                                                          │
-                                                                       ├─ /v1/*  ──► Amazon Bedrock us-east-2 (gateway adds the key)
-                                                                       ├─ /mcp   ──► https://search.solo.io/mcp
-                                                                       └─ logs   ──► Postgres ──► UI Logs / Analytics
+codex   (--profile agentgateway) ─┐
+                                  ├─► localhost:8080 ──► agentgateway-proxy
+claude  (claude-agw profile) ─────┘   (no API key)          │
+                                                            ├─ /v1/*  ──► Amazon Bedrock us-east-2 (gateway adds the key)
+                                                            ├─ /mcp   ──► https://search.solo.io/mcp
+                                                            └─ logs   ──► Postgres ──► UI Logs / Analytics
 ```
+
+Optionally the gateway requires a Microsoft Entra ID sign-in and group membership
+([Codex](entra-id/README.md), [Claude Code](claude-code/README.md#step-5--optional-entra-id-sign-in)).
 
 ![agentgateway UI Logs page showing Codex calls routed to Bedrock](docs/screenshots/logs.png)
 
@@ -21,6 +30,7 @@ Based on:
 - Cost dashboard / request-log database: <https://agentgateway.dev/docs/kubernetes/latest/documentation/llm/cost-controls/dashboard/>
 - Remote MCP over HTTPS: <https://agentgateway.dev/docs/kubernetes/latest/mcp/https/>
 - Codex client: <https://agentgateway.dev/docs/kubernetes/latest/integrations/llm/clients/codex/>
+- Claude Code client: <https://agentgateway.dev/docs/kubernetes/latest/integrations/llm/clients/claude-code/>
 
 ## Versions used
 
@@ -31,6 +41,7 @@ Based on:
 | agentgateway (Helm) | v1.7.0 |
 | Helm | v4.0.5 |
 | Codex CLI | 0.170.0 |
+| Claude Code | 2.1.328 |
 | Docker Desktop | 28.5.1 (macOS, arm64) |
 
 ## What gets deployed
@@ -42,6 +53,7 @@ Based on:
 | Postgres for request logs | manifest `k8s/03-postgres.yaml` | Step 5 |
 | Proxy database settings | manifest `k8s/04-gateway-parameters.yaml` | Step 5 |
 | Gateway → proxy Deployment + LoadBalancer | manifest `k8s/01-gateway.yaml` | Step 6 |
+| Gateway on a fixed `localhost:8080` | `kind-config.yaml` + manifest `k8s/09-fixed-port.yaml` | Steps 1 and 6 |
 | Model `gpt-oss-120b` (OpenAI on Bedrock) | manifest `k8s/02-model-bedrock-openai.yaml` | Step 7 |
 | MCP server `search.solo.io` at `/mcp` | manifest `k8s/05-mcp-solo-search.yaml` | Step 12 |
 | Codex profile | `~/.codex/agentgateway.config.toml` | Steps 10 and 12 |
@@ -55,7 +67,7 @@ this directory.
 ## Prerequisites
 
 - Docker Desktop running
-- `kind`, `kubectl`, `helm`, `jq`, `openssl`, `cloud-provider-kind`, `codex` on your `PATH`
+- `kind`, `kubectl`, `helm`, `jq`, `openssl` on your `PATH`, plus `codex` and/or `claude`
 - `BEDROCK_API_KEY` exported in your shell (Bedrock console → API keys)
 
 Every `kubectl`/`helm` command below pins the context so nothing lands on another cluster by accident:
@@ -64,30 +76,58 @@ Every `kubectl`/`helm` command below pins the context so nothing lands on anothe
 export CTX=kind-agentgateway-codex
 ```
 
-## Step 1 — Create the kind cluster
+## Quick start
+
+One script runs Steps 1–8 and 12, with all models:
 
 ```sh
-kind create cluster --name agentgateway-codex
+export BEDROCK_API_KEY='<your Bedrock API key>'
+scripts/deploy.sh                       # gateway at http://localhost:8080
+```
+
+Then set up a client: Step 10 for Codex, or
+[`scripts/claude-code-profile.sh`](claude-code/README.md#step-2--create-the-profile) for Claude Code.
+The script is safe to rerun. The steps below do the same thing by hand and explain each piece.
+
+## Step 1 — Create the kind cluster
+
+[`kind-config.yaml`](kind-config.yaml) maps `localhost:8080` on your machine to port 30080 on the node,
+which is where Step 6 publishes the gateway. The address is fixed and listens on `127.0.0.1` only.
+
+```sh
+kind create cluster --name agentgateway-codex --config kind-config.yaml
 kubectl --context $CTX get nodes
 ```
 
 > `kind create cluster` switches your current kubectl context to `kind-agentgateway-codex`.
 > Switch back with `kubectl config use-context <name>` when you are done.
 
-## Step 2 — Start cloud-provider-kind
+## Step 2 — Optional: cloud-provider-kind
 
-cloud-provider-kind gives `LoadBalancer` Services an external IP. Run it in a **separate terminal** and leave it running:
+Skip this step unless you want the gateway's `LoadBalancer` Service to get an external IP. With the
+fixed port from Step 1 nothing else needs it.
+
+<details>
+<summary>Running cloud-provider-kind</summary>
+
+Run it in a separate terminal and leave it running:
 
 ```sh
 cloud-provider-kind --gateway-channel disabled --enable-lb-port-mapping
 ```
 
-Why these flags:
-
 - `--gateway-channel disabled` — by default cloud-provider-kind installs its own Gateway API CRDs and gateway controller. We install the CRDs ourselves (v1.6.3) and use agentgateway as the controller.
-- `--enable-lb-port-mapping` — on macOS the Docker network (`172.18.0.0/16`) is not reachable from the host. With this flag each LoadBalancer is published on a random `localhost` port, and no `sudo` is needed.
+- `--enable-lb-port-mapping` — on macOS the Docker network (`172.18.0.0/16`) is not reachable from the host. With this flag each LoadBalancer is published on a random `localhost` port, and no `sudo` is needed. Find it with:
 
-**Alternative (sudo):** `sudo cloud-provider-kind --gateway-channel disabled` runs in tunnel mode, which makes the LoadBalancer IP itself reachable from the Mac on port 80. Without `sudo` and without `--enable-lb-port-mapping` it exits with ``please run this again with `sudo` ``.
+  ```sh
+  docker port $(docker ps --filter name=kindccm -q) 80/tcp
+  ```
+
+  That port is published on `0.0.0.0` (reachable from your LAN) and changes whenever the `kindccm-*`
+  container is recreated.
+- `sudo cloud-provider-kind --gateway-channel disabled` instead runs in tunnel mode, which makes the LoadBalancer IP itself reachable from the Mac on port 80.
+
+</details>
 
 ## Step 3 — Install the Gateway API CRDs
 
@@ -175,7 +215,7 @@ Notes:
 [`k8s/01-gateway.yaml`](k8s/01-gateway.yaml):
 
 ```sh
-kubectl --context $CTX apply -f k8s/01-gateway.yaml
+kubectl --context $CTX apply -f k8s/01-gateway.yaml -f k8s/09-fixed-port.yaml
 kubectl --context $CTX -n agentgateway-system rollout status deploy/agentgateway-proxy
 ```
 
@@ -186,10 +226,15 @@ port 80 from this resource. The Gateway also:
 - loads the database settings from Step 5 (`spec.infrastructure.parametersRef`). If those parameters do
   not exist yet, the Gateway stays `Programmed=False` and no proxy is created.
 
+[`k8s/09-fixed-port.yaml`](k8s/09-fixed-port.yaml) adds a `NodePort` Service on node port 30080 next to
+the controller's `LoadBalancer` Service. Together with Step 1 that puts the gateway on `localhost:8080`.
+Without cloud-provider-kind the `LoadBalancer` Service stays `<pending>`; that is fine.
+
 ## Step 7 — Configure the model (OpenAI gpt-oss-120b on Bedrock)
 
 This step publishes one model: OpenAI's `gpt-oss-120b`, served by Amazon Bedrock. To add
-`gpt-oss-20b` and Claude Haiku 4.5 afterwards, see [Other models](#other-models).
+`gpt-oss-20b` and Claude Haiku 4.5 afterwards, see [Other models](#other-models). For the Claude 5.5
+models that Claude Code uses, see [claude-code/README.md](claude-code/README.md).
 
 Store the Bedrock API key in a Secret. It is read from your environment and never written to a file:
 
@@ -218,28 +263,14 @@ How it works:
   `policies.auth.aws.secretRef` is for IAM access keys and fails with `accessKey is missing`.
 - **Region** is `spec.bedrock.region` (`us-east-2` here).
 
-## Step 8 — Get the gateway address
+## Step 8 — Set the gateway address
 
 ```sh
-kubectl --context $CTX get svc -n agentgateway-system agentgateway-proxy   # EXTERNAL-IP is assigned, e.g. 172.18.0.3
+export INGRESS_GW_ADDRESS=localhost:8080
 ```
 
-With `--enable-lb-port-mapping` (Step 2), use the host port that cloud-provider-kind published:
-
-```sh
-export INGRESS_GW_ADDRESS=localhost:$(docker port $(docker ps --filter name=kindccm -q) 80/tcp | head -1 | awk -F: '{print $NF}')
-echo $INGRESS_GW_ADDRESS        # e.g. localhost:60597
-```
-
-If you ran cloud-provider-kind with `sudo` instead, use the LoadBalancer IP directly:
-
-```sh
-export INGRESS_GW_ADDRESS=$(kubectl --context $CTX get svc -n agentgateway-system agentgateway-proxy \
-  -o jsonpath="{.status.loadBalancer.ingress[0].ip}")
-```
-
-> The mapped port is random. It changes whenever the `kindccm-*` container is recreated (for example
-> after restarting cloud-provider-kind or Docker). When it does, redo this step and Steps 10 and 12.
+If you created the cluster without `kind-config.yaml`, use cloud-provider-kind (Step 2) and the address
+it publishes instead, or delete the cluster and start again from Step 1.
 
 ## Step 9 — Test the gateway
 
@@ -253,6 +284,9 @@ curl -s "http://$INGRESS_GW_ADDRESS/v1/models" | jq -r '.data[].id'
 curl -s "http://$INGRESS_GW_ADDRESS/v1/responses" -H content-type:application/json \
   -d '{"model":"gpt-oss-120b","input":"Say hello in one sentence."}' | jq '.output[-1].content[0].text'
 ```
+
+The same models also answer on `/v1/chat/completions` (OpenAI chat) and `/v1/messages` (Anthropic, used
+by Claude Code).
 
 ## Step 10 — Point Codex at the gateway
 
@@ -409,19 +443,22 @@ kubectl --context $CTX -n agentgateway-system exec agentgateway-db-0 -- \
 
 ## Optional — Entra ID sign-in
 
-To make Codex sign in with Microsoft Entra ID before it can use the gateway, and to allow only members
-of one group, follow the separate guide: **[entra-id/README.md](entra-id/README.md)**.
+To require a Microsoft Entra ID sign-in before anyone can use the gateway, and to allow only members of
+one group:
 
-It covers the Entra group and app registration, the gateway policies, the Codex sign-in for the model
-and the MCP server, and showing the signed-in user in the logs.
+- **Codex:** [entra-id/README.md](entra-id/README.md) — the Entra group and app registration, the gateway
+  policies, the Codex sign-in for the model and the MCP server, and the signed-in user in the logs.
+- **Claude Code:** [claude-code/README.md, Step 5](claude-code/README.md#step-5--optional-entra-id-sign-in) —
+  the same gateway policies, with one sign-in that covers the model and the MCP server.
 
 ![Microsoft sign-in page that Codex opens](docs/screenshots/entra/signin.png)
 
 ## Optional — Claude Code
 
-To run Claude Code through the same gateway with Claude Opus, Sonnet and Haiku 5.5 on Bedrock, using
-its own isolated configuration directory and (optionally) Entra ID sign-in, follow the separate guide:
-**[claude-code/README.md](claude-code/README.md)**. It also has a one-command deploy on a fixed port.
+**[claude-code/README.md](claude-code/README.md)** runs Claude Code through the same gateway with Claude
+Opus, Sonnet and Haiku 5.5 on Bedrock. It uses its own configuration directory
+(`~/.claude-agentgateway`), so your normal Claude Code setup is untouched, and you start it with
+`claude-agw`.
 
 ## Other models
 
@@ -474,15 +511,10 @@ the model ID in the transformation.
 
 ## Things to know
 
-- **The gateway is unauthenticated by default.** Anyone who can reach the port can use your Bedrock key. With
-  `--enable-lb-port-mapping` the port is published on `0.0.0.0`, i.e. reachable from your LAN, not just
-  localhost. Fine for a short local test; on an untrusted network, stop cloud-provider-kind when you are
-  done or use `kubectl port-forward` (next bullet), which binds to `127.0.0.1` only. To require a sign-in,
-  do the [optional Entra ID section](entra-id/README.md).
-- **Fixed-port alternative:** create the cluster with `kind create cluster --name agentgateway-codex --config kind-config.yaml`
-  and apply `k8s/09-fixed-port.yaml`. The gateway is then always at `localhost:8080`, on `127.0.0.1`
-  only, and cloud-provider-kind (Step 2) is not needed. `scripts/deploy.sh` builds the whole setup this
-  way; see [claude-code/README.md](claude-code/README.md).
+- **The gateway is unauthenticated by default.** Anyone who can reach the port can use your Bedrock key.
+  The fixed port listens on `127.0.0.1` only, so that means programs on your machine. If you also run
+  cloud-provider-kind with `--enable-lb-port-mapping`, it publishes a second port on `0.0.0.0`, reachable
+  from your LAN. To require a sign-in, see [Optional — Entra ID sign-in](#optional--entra-id-sign-in).
 - **`codex exec` from a script** waits on stdin if it is not a TTY; add `</dev/null`.
 - **ChatGPT desktop app:** the docs cover this by replacing `~/.codex/config.toml`. Not done here, because
   that file holds existing plugin/MCP settings. To do it, merge the four keys from Step 10 into that file
@@ -498,7 +530,10 @@ the model ID in the transformation.
 
 ```sh
 rm ~/.codex/agentgateway.config.toml
-pkill cloud-provider-kind                     # or Ctrl-C in its terminal
+rm -rf ~/.claude-agentgateway                    # Claude Code profile, if you created it
 kind delete cluster --name agentgateway-codex    # also deletes the Postgres data
+
+# only if you ran cloud-provider-kind
+pkill cloud-provider-kind                        # or Ctrl-C in its terminal
 docker rm -f $(docker ps -aq --filter name=kindccm) 2>/dev/null
 ```
