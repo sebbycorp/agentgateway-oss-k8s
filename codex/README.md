@@ -13,7 +13,7 @@ Tested with Codex CLI 0.170.0 and agentgateway v1.7.0.
 
 ## Before you start
 
-The gateway is built (main README, Option A or B) and answers:
+The gateway is built (main README, Steps 1–10) and answers:
 
 ```sh
 export CTX=kind-agentgateway-codex
@@ -21,21 +21,7 @@ export INGRESS_GW_ADDRESS=localhost:8080
 curl -s "http://$INGRESS_GW_ADDRESS/v1/models" | jq -r '.data[].id'      # lists gpt-oss-120b
 ```
 
-Then create the profile with **Option A** (script) or **Option B** (by hand). They produce the same file.
-
-## Option A — Create the profile with the script
-
-```sh
-scripts/codex-profile.sh
-```
-
-[`scripts/codex-profile.sh`](../scripts/codex-profile.sh) writes `~/.codex/agentgateway.config.toml` with
-the model provider and the `solo-search` MCP server. If the file exists, the old one is kept as
-`agentgateway.config.toml.bak`. Continue with [Run it](#run-it).
-
-## Option B — Create the profile by hand
-
-### Step 1 — Write the profile
+## Step 1 — Write the profile
 
 Create a Codex profile. This is a separate file, so your existing `~/.codex/config.toml` is untouched:
 
@@ -58,7 +44,7 @@ EOF
 - No `env_key` is set, so Codex sends no credential. The gateway supplies the Bedrock key.
 - `model` must be the name the gateway publishes.
 
-### Step 2 — Add the MCP server
+## Step 2 — Add the MCP server
 
 The gateway exposes `https://search.solo.io/mcp` at `/mcp` (main README, Step 10). Append it to the
 profile:
@@ -71,7 +57,7 @@ url = "http://${INGRESS_GW_ADDRESS}/mcp"
 EOF
 ```
 
-## Run it
+## Step 3 — Run it
 
 ```sh
 codex --profile agentgateway                    # interactive
@@ -87,7 +73,7 @@ codex -c model_provider='"agentgateway"' \
   -c model_providers.agentgateway.wire_api='"responses"'
 ```
 
-## Verify Codex traffic goes through the gateway
+## Step 4 — Verify Codex traffic goes through the gateway
 
 ```sh
 codex exec --profile agentgateway --skip-git-repo-check "Reply with exactly: hello from agentgateway"
@@ -116,8 +102,8 @@ The calls also show on the UI Logs and Analytics pages (main README, Step 11).
 
 ## Other models
 
-Apply [`k8s/07-more-bedrock-models.yaml`](../k8s/07-more-bedrock-models.yaml) (main README, Step 7; the
-deploy script already does) and pick a model with `-m`:
+Apply [`k8s/07-more-bedrock-models.yaml`](../k8s/07-more-bedrock-models.yaml) (main README, Step 7)
+and pick a model with `-m`:
 
 ```sh
 codex --profile agentgateway -m claude-haiku-4-5      # or: -m gpt-oss-20b
@@ -159,8 +145,7 @@ with Claude models. The OpenAI models on Bedrock accept them.
 ## Entra ID sign-in
 
 To make Codex sign in with Microsoft Entra ID before it can use the gateway, follow
-**[entra-id/README.md](../entra-id/README.md)**. With `TENANT_ID` and `APP_ID` set,
-`scripts/codex-profile.sh` writes the profile from Step 6 of that guide for you.
+**[entra-id/README.md](../entra-id/README.md)**.
 
 ## Things to know
 

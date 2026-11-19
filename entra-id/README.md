@@ -256,7 +256,7 @@ The "group not matching" row was tested by pointing the policy at a group ID tha
 
 ## Step 6 — Update the Codex profile
 
-Rewrite the profile from the [Codex guide](../codex/README.md) (`TENANT_ID=$TENANT_ID APP_ID=$APP_ID scripts/codex-profile.sh` does the same). The `gateway_oauth` table tells Codex where to sign you in:
+Rewrite the profile from the [Codex guide](../codex/README.md). The `gateway_oauth` table tells Codex where to sign you in:
 
 ```sh
 cat > ~/.codex/agentgateway.config.toml <<EOF
@@ -457,7 +457,7 @@ kubectl --context $CTX -n agentgateway-system delete agentgatewaypolicy entra-au
 kubectl --context $CTX -n agentgateway-system patch agentgatewayparameters agentgateway-proxy-params \
   --type json -p '[{"op":"remove","path":"/spec/rawConfig/config/standardAttributes"}]'
 
-# restore the profile (codex/README.md, or scripts/codex-profile.sh), and remove the alias from ~/.zshrc
+# restore the profile (codex/README.md, Steps 1 and 2), and remove the alias from ~/.zshrc
 rm -f ~/.codex/secrets/gateway_oauth.age
 codex --profile agentgateway mcp logout solo-search
 

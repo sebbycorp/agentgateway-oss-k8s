@@ -9,7 +9,7 @@ Claude Code has no named profiles, so this uses a separate configuration directo
 separate from your normal `~/.claude`, which is not touched.
 
 ```
-claude-agw ──► claude (CLAUDE_CONFIG_DIR=~/.claude-agentgateway)
+claude-agw = claude with CLAUDE_CONFIG_DIR=~/.claude-agentgateway
                  │  POST /v1/messages          (Entra token, if sign-in is on)
                  ▼
         agentgateway on localhost:8080 ──► Amazon Bedrock us-east-2 (gateway adds the key)
@@ -18,22 +18,18 @@ claude-agw ──► claude (CLAUDE_CONFIG_DIR=~/.claude-agentgateway)
 
 Tested with Claude Code 2.1.328 and agentgateway v1.7.0.
 
-Steps 2 and 5 each have two paths side by side: **Option A** uses a script, **Option B** does the same
-thing by hand.
+Everything is configured by hand; there are no setup scripts. Two files from this directory are used:
 
 | File | What it is |
 |---|---|
 | [`k8s/08-claude-code-models.yaml`](../k8s/08-claude-code-models.yaml) | Claude Opus, Sonnet and Haiku 5.5 on Bedrock |
-| [`scripts/claude-code-profile.sh`](../scripts/claude-code-profile.sh) | Creates the Claude Code profile (Option A) |
-| [`claude-agw`](claude-agw) | Launcher: signs you in if needed, then starts Claude Code with the profile |
-| [`entra-token.py`](entra-token.py) | Entra ID sign-in and token refresh |
+| [`entra-token.py`](entra-token.py) | Only for Entra ID sign-in (Step 5): the program Claude Code runs to get its token |
 
 ## Step 1 — Build the gateway with the Claude models
 
-Build the gateway from the [main README](../README.md), with its script (Option A there) or by hand
-(Option B there). Claude Code needs the three models in
+Build the gateway from the [main README](../README.md), Steps 1–10. Claude Code needs the three models in
 [`k8s/08-claude-code-models.yaml`](../k8s/08-claude-code-models.yaml), published under the names it
-asks for. The deploy script applies that file; by hand it is the last command of Step 7:
+asks for. Applying that file is the last command of Step 7 there:
 
 ```sh
 export CTX=kind-agentgateway-codex
@@ -59,22 +55,11 @@ curl -s localhost:8080/v1/messages -H content-type:application/json -H 'anthropi
 
 ## Step 2 — Create the profile
 
-Both options produce the same profile in `~/.claude-agentgateway`.
-
-### Option A — With the script
-
-```sh
-scripts/claude-code-profile.sh
-```
-
-It writes `settings.json`, installs the `claude-agw` launcher, and adds the `solo-search` MCP server.
-Safe to rerun; other settings in the profile are kept.
-
-### Option B — By hand
+The profile is a directory, `~/.claude-agentgateway`, with a settings file and an MCP server entry.
 
 ```sh
 P=$HOME/.claude-agentgateway
-mkdir -p $P/bin
+mkdir -p $P
 
 # 1. Settings: where the gateway is and which models to use
 cat > $P/settings.json <<'EOF'
@@ -94,15 +79,12 @@ EOF
 
 # 2. The MCP server on the gateway, stored in the profile's own .claude.json
 CLAUDE_CONFIG_DIR=$P claude mcp add --transport http --scope user solo-search http://localhost:8080/mcp
-
-# 3. The launcher
-install -m 755 claude-code/claude-agw $P/bin/claude-agw
 ```
 
-### Both options — add the alias
+Add an alias so one word starts Claude Code with this profile:
 
 ```sh
-echo "alias claude-agw='\$HOME/.claude-agentgateway/bin/claude-agw'" >> ~/.zshrc && source ~/.zshrc
+echo "alias claude-agw='CLAUDE_CONFIG_DIR=\$HOME/.claude-agentgateway claude'" >> ~/.zshrc && source ~/.zshrc
 ```
 
 ### What the settings mean
@@ -124,8 +106,7 @@ claude-agw -p "Hello"         # one-shot
 claude-agw --model opus       # pick a model
 ```
 
-`claude-agw` passes its arguments to `claude`. Without the launcher, the same thing is
-`CLAUDE_CONFIG_DIR=~/.claude-agentgateway claude`.
+Plain `claude` still uses your normal `~/.claude`.
 
 The first interactive start asks for a colour theme (it is a new profile). It does not ask for an
 Anthropic login.
@@ -155,31 +136,18 @@ The calls also show on the UI Logs and Analytics pages (main README, Step 11).
 
 With this on, the gateway answers 401 without a valid Entra token and 403 unless you are in the allowed
 group, for the models and the MCP server. `claude-agw` opens the Microsoft sign-in page when you have
-no usable sign-in, and the Logs page shows who made each call.
+no usable sign-in, and the Logs page shows who made each call. The gateway side is the same as in the
+[Entra guide](../entra-id/README.md); only the client side differs from Codex.
 
-**1. Create the Entra group and app registration** (once per tenant; needs `az login`).
-
-Option A — with the script. It reuses the objects if they exist and prints three `export` lines; run
-those:
-
-```sh
-scripts/entra-setup.sh
-export TENANT_ID=... APP_ID=... GROUP_ID=...
-```
-
-Option B — by hand: Steps 1–3 of the [Entra guide](../entra-id/README.md), which also explain each
-setting.
-
-**2. Turn it on at the gateway.**
-
-Option A — with the script. With the three variables set, `deploy.sh` applies
-[`k8s/06-entra-auth.yaml`](../k8s/06-entra-auth.yaml) and puts the sign-in name in the request logs:
+**1. Create the Entra group and app registration** (once per tenant; needs `az login`): do Steps 1–3
+of the [Entra guide](../entra-id/README.md). Afterwards these are set in your shell:
 
 ```sh
-scripts/deploy.sh
+echo $TENANT_ID $APP_ID $GROUP_ID
 ```
 
-Option B — by hand (Steps 4 and 10 of the Entra guide):
+**2. Turn it on at the gateway.** Apply [`k8s/06-entra-auth.yaml`](../k8s/06-entra-auth.yaml) and put
+the sign-in name in the request logs (Steps 4 and 10 of the Entra guide):
 
 ```sh
 sed -e "s/\${TENANT_ID}/$TENANT_ID/g" -e "s/\${APP_ID}/$APP_ID/g" -e "s/\${GROUP_ID}/$GROUP_ID/g" \
@@ -189,21 +157,13 @@ kubectl --context $CTX -n agentgateway-system patch agentgatewayparameters agent
 kubectl --context $CTX -n agentgateway-system rollout status deploy/agentgateway-proxy
 ```
 
-Either way, the gateway now rejects calls without a token:
+The gateway now rejects calls without a token:
 
 ```sh
 curl -s -o /dev/null -w "%{http_code}\n" -X POST localhost:8080/v1/messages    # 401
 ```
 
 **3. Switch the profile to Entra sign-in.**
-
-Option A — with the script (with `TENANT_ID` and `APP_ID` still set):
-
-```sh
-scripts/claude-code-profile.sh
-```
-
-Option B — by hand:
 
 ```sh
 P=$HOME/.claude-agentgateway
@@ -222,7 +182,7 @@ CLAUDE_CONFIG_DIR=$P claude mcp add-json --scope user solo-search \
   "{\"type\": \"http\", \"url\": \"http://localhost:8080/mcp\", \"headersHelper\": \"$P/entra-token.py headers\"}"
 ```
 
-Either way, three things change in the profile:
+Three things changed in the profile:
 
 - `settings.json` gets `"apiKeyHelper": "~/.claude-agentgateway/entra-token.py"` and loses
   `ANTHROPIC_AUTH_TOKEN`. Claude Code runs the helper and sends its output as the bearer token.
@@ -230,7 +190,17 @@ Either way, three things change in the profile:
   sign-in covers `/mcp`. There is no second sign-in and no extra redirect URI to register.
 - `entra.json` holds the tenant and app IDs.
 
-**4. Sign in and use it:**
+**4. Make `claude-agw` sign you in first.** Replace the alias from Step 2 in `~/.zshrc` with this one,
+then `source ~/.zshrc`:
+
+```sh
+alias claude-agw='$HOME/.claude-agentgateway/entra-token.py ensure && CLAUDE_CONFIG_DIR=$HOME/.claude-agentgateway claude'
+```
+
+`ensure` does nothing when you have a usable sign-in, and opens the Microsoft sign-in page when you do
+not.
+
+**5. Sign in and use it:**
 
 ```sh
 claude-agw            # opens the Microsoft sign-in page the first time, then starts Claude Code
@@ -238,14 +208,14 @@ claude-agw            # opens the Microsoft sign-in page the first time, then st
 
 How the sign-in works: [`entra-token.py`](entra-token.py) does a browser sign-in with PKCE against
 your app registration (a public client, no secret), using the `http://localhost/callback` redirect URI
-that `entra-setup.sh` registers. It keeps the access and refresh token in
+that Step 2 of the Entra guide registers. It keeps the access and refresh token in
 `~/.claude-agentgateway/entra-token.json`, readable only by you, and refreshes the access token when
 under 10 minutes are left. Claude Code asks the helper again every 5 minutes and after a 401.
 
 | Command | What it does |
 |---|---|
-| `claude-agw login` | Sign in again (for example as another user) |
-| `claude-agw logout` | Forget the sign-in. The next `claude-agw` opens the sign-in page |
+| `~/.claude-agentgateway/entra-token.py login` | Sign in again (for example as another user) |
+| `~/.claude-agentgateway/entra-token.py logout` | Forget the sign-in. The next `claude-agw` opens the sign-in page |
 
 Check who the gateway saw:
 
@@ -255,8 +225,8 @@ kubectl --context $CTX -n agentgateway-system exec agentgateway-db-0 -- \
   'select started_at, http_status, agentgateway_user, gen_ai_request_model from request_logs order by started_at desc limit 5'
 ```
 
-To turn sign-in off again: delete the two policies (Entra guide, "Turn it off") and redo Step 2 with
-either option (run the script without `TENANT_ID` and `APP_ID` set).
+To turn sign-in off again: delete the two policies (Entra guide, "Turn it off"), then redo Step 2,
+including the alias.
 
 ## Things to know
 
@@ -271,7 +241,8 @@ either option (run the script without `TENANT_ID` and `APP_ID` set).
   Claude Code's prompt-cache markers and its `thinking` setting for those models. Use Codex for them.
 - **Only `claude-agw` opens the sign-in page.** If the sign-in expires in the middle of a long session
   (the refresh token is revoked or unused for 90 days), calls fail with
-  `Not signed in to Entra ID`. Run `claude-agw login` in another terminal; the session then continues.
+  `Not signed in to Entra ID`. Run `~/.claude-agentgateway/entra-token.py login` in another terminal; the
+  session then continues.
 - **Group changes take up to an hour**, because membership is read when the token is issued.
 - **The refresh token is stored in a plain file** with `0600` permissions, not in the macOS Keychain.
 - **Codex on the same gateway.** See [codex/README.md](../codex/README.md). With Entra on, follow the

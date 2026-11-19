@@ -16,8 +16,8 @@ claude  (claude-agw profile) ─────┘   (no API key)          │
                                                             └─ logs   ──► Postgres ──► UI Logs / Analytics
 ```
 
-This page builds the gateway. Each client guide then has two paths side by side: a script, and the same
-thing by hand.
+This page builds the gateway step by step, by hand. Each client guide then configures its client the
+same way. There are no setup scripts; every command is on the page.
 
 Optionally the gateway requires a Microsoft Entra ID sign-in and group membership
 ([Codex](entra-id/README.md), [Claude Code](claude-code/README.md#step-5--optional-entra-id-sign-in)).
@@ -79,22 +79,6 @@ Every `kubectl`/`helm` command below pins the context so nothing lands on anothe
 ```sh
 export CTX=kind-agentgateway-codex
 ```
-
-## Option A — Build it with the script
-
-One script runs Steps 1–8 and 10 below, with all models:
-
-```sh
-export BEDROCK_API_KEY='<your Bedrock API key>'
-scripts/deploy.sh                       # gateway at http://localhost:8080
-```
-
-The script is safe to rerun. When it finishes, test the gateway (Step 9), open the UI (Step 11) and
-[connect a client](#connect-a-client).
-
-## Option B — Build it by hand
-
-Steps 1–11 below do the same thing one command at a time and explain each piece.
 
 ## Step 1 — Create the kind cluster
 
@@ -403,7 +387,7 @@ kubectl --context $CTX -n agentgateway-system exec agentgateway-db-0 -- \
 | OpenAI Codex CLI | [codex/README.md](codex/README.md) | `codex --profile agentgateway` |
 | Claude Code | [claude-code/README.md](claude-code/README.md) | `claude-agw` |
 
-Both guides have a scripted path and a by-hand path. Both clients can use the gateway at the same time.
+Both clients can use the gateway at the same time.
 
 ## Optional — Entra ID sign-in
 

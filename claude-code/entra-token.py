@@ -6,7 +6,7 @@ Claude Code runs this to get the token it sends to the gateway. Needs only Pytho
   entra-token.py            print a valid access token (Claude Code's apiKeyHelper)
   entra-token.py headers    print {"Authorization": "Bearer ..."} (MCP headersHelper)
   entra-token.py login      open the Microsoft sign-in page in the browser
-  entra-token.py ensure     sign in only if there is no usable sign-in (used by claude-agw)
+  entra-token.py ensure     sign in only if there is no usable sign-in (used by the claude-agw alias)
   entra-token.py logout     forget the sign-in
 
 Reads the tenant and app IDs from entra.json next to this file. Keeps the tokens in
@@ -140,7 +140,7 @@ def main():
         tok = current()
         if not tok:
             # Never open a browser from here: Claude Code runs this in the background.
-            sys.exit("Not signed in to Entra ID. Run: claude-agw login")
+            sys.exit(f"Not signed in to Entra ID. Run: {os.path.abspath(__file__)} login")
         print(json.dumps({"Authorization": f"Bearer {tok}"}) if cmd == "headers" else tok)
     else:
         sys.exit(__doc__)
