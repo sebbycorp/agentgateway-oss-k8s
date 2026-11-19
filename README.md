@@ -187,7 +187,8 @@ port 80 from this resource. The Gateway also:
 
 ## Step 7 — Configure the model (OpenAI gpt-oss-120b on Bedrock)
 
-The gateway publishes exactly one model: OpenAI's `gpt-oss-120b`, served by Amazon Bedrock.
+This step publishes one model: OpenAI's `gpt-oss-120b`, served by Amazon Bedrock. To add
+`gpt-oss-20b` and Claude Haiku 4.5 afterwards, see [Other models](#other-models).
 
 Store the Bedrock API key in a Secret. It is read from your environment and never written to a file:
 
