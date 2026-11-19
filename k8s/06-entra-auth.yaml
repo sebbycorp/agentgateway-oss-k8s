@@ -34,3 +34,41 @@ spec:
       policy:
         matchExpressions:
         - '"${GROUP_ID}" in jwt.groups'
+---
+# The MCP route gets the same checks plus MCP sign-in support: the gateway
+# serves the OAuth discovery endpoints an MCP client needs to send the user to
+# Entra (`codex mcp login`). A route-level jwtAuthentication replaces the
+# gateway-level one for this route, so the provider is repeated here.
+apiVersion: agentgateway.dev/v1alpha1
+kind: AgentgatewayPolicy
+metadata:
+  name: entra-auth-mcp
+  namespace: agentgateway-system
+spec:
+  targetRefs:
+  - group: gateway.networking.k8s.io
+    kind: HTTPRoute
+    name: solo-search-mcp
+  traffic:
+    jwtAuthentication:
+      mode: Strict
+      providers:
+      - issuer: https://login.microsoftonline.com/${TENANT_ID}/v2.0
+        audiences:
+        - ${APP_ID}
+        jwks:
+          remote:
+            url: https://login.microsoftonline.com/${TENANT_ID}/discovery/v2.0/keys
+      mcp:
+        provider: Entra          # bridges the gaps between Entra and the MCP auth spec
+        clientId: ${APP_ID}      # Entra has no dynamic client registration; hand out this client ID
+        resourceMetadata:
+          scopesSupported:
+          - api://${APP_ID}/access
+          bearerMethodsSupported:
+          - header
+    authorization:
+      action: Allow
+      policy:
+        matchExpressions:
+        - '"${GROUP_ID}" in jwt.groups'

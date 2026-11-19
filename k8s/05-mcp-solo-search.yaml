@@ -30,6 +30,14 @@ spec:
     - path:
         type: PathPrefix
         value: /mcp
+    # Only used by the optional Entra ID section: OAuth discovery endpoints
+    # the gateway serves so MCP clients can find where to sign in.
+    - path:
+        type: PathPrefix
+        value: /.well-known/oauth-protected-resource
+    - path:
+        type: PathPrefix
+        value: /.well-known/oauth-authorization-server
     backendRefs:
     - name: solo-search-mcp
       group: agentgateway.dev

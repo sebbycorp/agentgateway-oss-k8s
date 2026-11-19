@@ -409,20 +409,21 @@ Microsoft Entra ID sign-in, and only members of one group to reach the model and
 How it works:
 
 ```
-az login (you)                      Codex runs `az account get-access-token`
-      │                                          │  Authorization: Bearer <Entra token>
-      ▼                                          ▼
-Entra ID ── token with your group IDs ──►  agentgateway-proxy
-                                             1. valid token from my tenant, for my app?  no → 401
-                                             2. "codex" group ID in the token's groups?  no → 403
-                                             3. yes → Bedrock (/v1) and search.solo.io (/mcp)
+you type `codex`
+      │  no valid sign-in yet? Codex opens the Microsoft sign-in page in your browser
+      ▼
+Entra ID ── token with your group IDs ──► Codex ── Authorization: Bearer <token> ──► agentgateway-proxy
+                                                     1. valid token from my tenant, for my app?  no → 401
+                                                     2. "codex" group ID in the token's groups?  no → 403
+                                                     3. yes → Bedrock (/v1) and search.solo.io (/mcp)
 ```
 
-This uses only OSS features: one `AgentgatewayPolicy` with `jwtAuthentication` and `authorization`.
-Codex does not open a browser itself — your `az login` session is the sign-in, and Codex asks the Azure
-CLI for a token whenever it needs one.
+This uses only OSS features: `AgentgatewayPolicy` with `jwtAuthentication` and `authorization`. On the
+client side it uses two things built into Codex CLI (tested with 0.170.0): gateway OAuth for the model
+provider, and MCP OAuth for the MCP server. Codex stores and refreshes the tokens itself.
 
-You need the Azure CLI (`az`), signed in as a user who may create groups and app registrations:
+To set it up you need the Azure CLI (`az`), signed in as a user who may create groups and app
+registrations. (Using Codex afterwards does not need `az`.)
 
 ```sh
 az login
@@ -480,14 +481,26 @@ az rest --method PATCH --uri "https://graph.microsoft.com/v1.0/applications/$OBJ
     }] }
   }"
 
+# Let Codex sign users in: public client (no secret) with loopback redirect URIs.
+# Entra ignores the port of a loopback URI but matches the path exactly.
+az rest --method PATCH --uri "https://graph.microsoft.com/v1.0/applications/$OBJECT_ID" \
+  --headers 'Content-Type=application/json' --body '{
+    "isFallbackPublicClient": true,
+    "publicClient": { "redirectUris": ["http://127.0.0.1/callback", "http://localhost/callback"] }
+  }'
+
 # The app needs a service principal in the tenant before tokens can be issued for it
 az ad sp create --id $APP_ID
 ```
 
 The same thing in the portal: **Entra ID → App registrations → New registration**, then
 **Expose an API** (set the Application ID URI, add scope `access`, add the Azure CLI client ID under
-*Authorized client applications*), **Token configuration → Add groups claim → Security groups**, and
-**Manifest →** `"requestedAccessTokenVersion": 2`.
+*Authorized client applications*), **Token configuration → Add groups claim → Security groups**,
+**Manifest →** `"requestedAccessTokenVersion": 2`, and **Authentication → Add a platform → Mobile and
+desktop applications** with the two redirect URIs (not the *Web* platform — that would require a client
+secret). `http://127.0.0.1/...` URIs can only be added through the manifest or the command above.
+
+The Azure CLI pre-authorization is only there so you can fetch a test token with `az` in steps C and E.
 
 Shortcut for A and B: [`scripts/entra-setup.sh`](scripts/entra-setup.sh) runs the same commands, reuses
 objects that already exist, and prints the three `export` lines.
@@ -507,22 +520,30 @@ print(json.dumps({k: c.get(k) for k in ['iss', 'aud', 'scp', 'groups']}, indent=
 
 Expect `iss` to end in `/<TENANT_ID>/v2.0`, `aud` to equal `$APP_ID`, and `groups` to contain `$GROUP_ID`.
 
-### D. Apply the policy
+### D. Apply the policies
 
-[`k8s/06-entra-auth.yaml`](k8s/06-entra-auth.yaml) attaches to the Gateway, so it covers both `/v1` and
-`/mcp`. It holds three placeholders, filled in at apply time:
+[`k8s/06-entra-auth.yaml`](k8s/06-entra-auth.yaml) holds two policies. It has three placeholders, filled
+in at apply time:
+
+| Policy | Attached to | What it does |
+|---|---|---|
+| `entra-auth` | the Gateway | Requires a valid token and the group for everything, including `/v1` |
+| `entra-auth-mcp` | the `solo-search-mcp` route | Same checks, plus `mcp.provider: Entra` so the gateway serves the OAuth discovery endpoints that `codex mcp login` needs |
 
 ```sh
+kubectl --context $CTX apply -f k8s/05-mcp-solo-search.yaml   # route now also matches /.well-known/oauth-*
+
 sed -e "s/\${TENANT_ID}/$TENANT_ID/g" -e "s/\${APP_ID}/$APP_ID/g" -e "s/\${GROUP_ID}/$GROUP_ID/g" \
   k8s/06-entra-auth.yaml | kubectl --context $CTX apply -f -
 
-kubectl --context $CTX -n agentgateway-system get agentgatewaypolicy entra-auth \
-  -o jsonpath='{range .status.ancestors[*].conditions[*]}{.type}={.status}{"\n"}{end}'
-# Accepted=True
-# Attached=True
+kubectl --context $CTX -n agentgateway-system get agentgatewaypolicy \
+  -o custom-columns='NAME:.metadata.name,ACCEPTED:.status.ancestors[0].conditions[?(@.type=="Accepted")].status,ATTACHED:.status.ancestors[0].conditions[?(@.type=="Attached")].status'
+# NAME             ACCEPTED   ATTACHED
+# entra-auth       True       True
+# entra-auth-mcp   True       True
 ```
 
-The two parts of the policy:
+The core of both policies:
 
 ```yaml
 traffic:
@@ -534,6 +555,9 @@ traffic:
       jwks:
         remote:
           url: https://login.microsoftonline.com/<TENANT_ID>/discovery/v2.0/keys
+    mcp:                        # only on the MCP route
+      provider: Entra
+      clientId: <APP_ID>
   authorization:                # are you allowed?  → 403 if not in the group
     action: Allow
     policy:
@@ -568,7 +592,7 @@ Results from this setup:
 
 ### F. Update the Codex profile
 
-Rewrite the profile from Steps 10 and 12 so Codex fetches a token for both the model and the MCP server:
+Rewrite the profile from Steps 10 and 12. The `gateway_oauth` table tells Codex where to sign you in:
 
 ```sh
 cat > ~/.codex/agentgateway.config.toml <<EOF
@@ -576,30 +600,79 @@ model = "gpt-oss-120b"
 model_provider = "agentgateway"
 
 [model_providers.agentgateway]
-name = "OpenAI via agentgateway"
+name = "agentgateway"
 base_url = "http://${INGRESS_GW_ADDRESS}/v1"
 wire_api = "responses"
 
-# Codex runs this to get a bearer token for the gateway (your az login is the sign-in).
-[model_providers.agentgateway.auth]
-command = "az"
-args = ["account", "get-access-token", "--scope", "api://${APP_ID}/.default", "--query", "accessToken", "-o", "tsv"]
-timeout_ms = 20000
+# Codex signs you in with Microsoft Entra ID before it calls the gateway.
+[model_providers.agentgateway.gateway_oauth]
+authorization_url = "https://login.microsoftonline.com/${TENANT_ID}/oauth2/v2.0/authorize"
+token_url = "https://login.microsoftonline.com/${TENANT_ID}/oauth2/v2.0/token"
+client_id = "${APP_ID}"
+scopes = ["api://${APP_ID}/access", "offline_access"]
 
+# Sign in once with: codex --profile agentgateway mcp login solo-search
 [mcp_servers.solo-search]
 url = "http://${INGRESS_GW_ADDRESS}/mcp"
-# Prints {"Authorization": "Bearer <token>"} for each MCP connection.
-http_headers_helper = '''az account get-access-token --scope api://${APP_ID}/.default --query "{Authorization: join(' ', ['Bearer', accessToken])}" -o json'''
 EOF
+```
+
+### G. Sign in for the model
+
+```sh
+codex --profile agentgateway
+```
+
+Codex opens the Microsoft sign-in page (or prints the URL: `Authorize the model provider by opening
+this URL`). After you sign in, Codex continues and your prompts go through the gateway. The token is
+kept encrypted in `~/.codex/secrets/` and refreshed automatically, so later runs do not prompt again.
+
+### H. Sign in for the MCP server
+
+The MCP server has its own sign-in. Codex uses a callback path that ends in an ID derived from the MCP
+server URL, and Entra must know that exact path. Print it:
+
+```sh
+codex --profile agentgateway mcp login solo-search --no-browser </dev/null 2>&1 \
+  | grep -oE 'redirect_uri=[^&]+' | python3 -c "import sys, urllib.parse as u; print(u.unquote(sys.stdin.read()))"
+# redirect_uri=http://127.0.0.1:63884/callback/dFBqJtJnaDT6      ← your ID will differ
+```
+
+Register that path (without the port) on the app, next to the two from step B:
+
+```sh
+CALLBACK_ID=<the last path segment, e.g. dFBqJtJnaDT6>
+az rest --method PATCH --uri "https://graph.microsoft.com/v1.0/applications/$OBJECT_ID" \
+  --headers 'Content-Type=application/json' --body "{
+    \"publicClient\": { \"redirectUris\": [
+      \"http://127.0.0.1/callback\", \"http://localhost/callback\",
+      \"http://127.0.0.1/callback/$CALLBACK_ID\"
+    ] }
+  }"
+```
+
+Wait about 30 seconds, then sign in and test:
+
+```sh
+codex --profile agentgateway mcp login solo-search
+# Successfully logged in to MCP server 'solo-search'.
 
 codex exec --profile agentgateway --skip-git-repo-check \
   "Use the solo-search MCP search tool to look up: AgentgatewayPolicy. Reply with the top result's title."
 ```
 
-No token is stored in the file. Codex re-runs the command every 5 minutes; the Azure CLI caches and
-renews the token (about one hour lifetime) on its own. Tested with Codex CLI 0.170.0.
+### I. Make plain `codex` use the gateway
 
-Each request log row now records who made the call (`agentgateway_user` is the token's `sub` claim):
+```sh
+echo 'alias codex="codex --profile agentgateway"' >> ~/.zshrc
+source ~/.zshrc
+```
+
+Now `codex` always goes through the gateway and asks for an Entra sign-in when it has none. Use
+`command codex` to run Codex without the profile. (The alternative is to put the profile's settings in
+`~/.codex/config.toml`, but that file is shared with the ChatGPT desktop app.)
+
+Each request log row records who made the call (`agentgateway_user` is the token's `sub` claim):
 
 ```sh
 kubectl --context $CTX -n agentgateway-system exec agentgateway-db-0 -- \
@@ -609,29 +682,30 @@ kubectl --context $CTX -n agentgateway-system exec agentgateway-db-0 -- \
 
 ### Things to know about Entra sign-in
 
-- **Signed out = locked out.** After `az logout`, or when the session expires, Codex fails with an auth
-  error. Run `az login` again.
+- **Signing out.** MCP server: `codex --profile agentgateway mcp logout solo-search`. Model: delete
+  `~/.codex/secrets/gateway_oauth.age`; the next run asks you to sign in again.
 - **Group changes take up to an hour.** Membership is read when the token is issued. After adding or
-  removing someone, they keep their old access until the cached token expires. To force a new token:
-  `az logout && az login`.
+  removing someone, their current token keeps working until it expires.
+- **The MCP callback ID changes when the gateway address changes.** With `--enable-lb-port-mapping` the
+  port is random per run, so after a restart redo step H (and update the profile). A fixed address
+  avoids this — see the stable-port alternative under [Things to know](#things-to-know).
 - **More than 200 groups:** Entra leaves the `groups` claim out of the token for such users and the
   policy answers 403. Fix: in the app's *Token configuration*, emit only *Groups assigned to the
   application*, and assign the group to the app's enterprise application.
 - **Different access per route:** this policy targets the whole Gateway. To use a different group for the
   MCP server, create a second policy with only `authorization` and a `targetRefs` entry of kind
   `HTTPRoute`, name `solo-search-mcp`.
-- **Codex prints `failed to refresh available models`** at startup once auth is on. It is harmless —
-  requests still work.
 - **Traffic is still plain HTTP** between Codex and the gateway on your machine. The token is a bearer
   credential; for anything beyond local use, put TLS on the listener.
-- **Browser-based MCP sign-in** (`codex mcp login` with the gateway's `jwtAuthentication.mcp` Entra
-  mode) is not covered here; the Azure CLI token approach above is what was tested.
+- **Alternative without browser sign-in in Codex:** Codex can instead run a command that prints a token
+  (`[model_providers.<id>.auth]` with `command = "az"`, and `http_headers_helper` on the MCP server).
+  That reuses an existing `az login` session and was also tested here, but it never prompts.
 
 To turn it off again:
 
 ```sh
-kubectl --context $CTX -n agentgateway-system delete agentgatewaypolicy entra-auth
-# then restore the profile from Steps 10 and 12
+kubectl --context $CTX -n agentgateway-system delete agentgatewaypolicy entra-auth entra-auth-mcp
+# then restore the profile from Steps 10 and 12, and remove the alias from ~/.zshrc
 az ad app delete --id $APP_ID        # optional
 az ad group delete --group $GROUP_ID # optional
 ```

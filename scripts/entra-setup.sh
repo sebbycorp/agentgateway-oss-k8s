@@ -60,6 +60,14 @@ az rest --method PATCH --uri "https://graph.microsoft.com/v1.0/applications/$OBJ
     }] }
   }"
 
+# Let Codex sign users in: public client (no secret) with loopback redirect URIs.
+# Existing redirect URIs (e.g. the MCP callback from README step H) are kept.
+EXISTING=$(az ad app show --id "$APP_ID" --query 'publicClient.redirectUris' -o json)
+URIS=$(python3 -c 'import json,sys; print(json.dumps(sorted(set(json.loads(sys.argv[1]) + ["http://127.0.0.1/callback", "http://localhost/callback"]))))' "$EXISTING")
+az rest --method PATCH --uri "https://graph.microsoft.com/v1.0/applications/$OBJECT_ID" \
+  --headers 'Content-Type=application/json' \
+  --body "{\"isFallbackPublicClient\": true, \"publicClient\": {\"redirectUris\": $URIS}}"
+
 # The app needs a service principal in the tenant before tokens can be issued for it.
 if [ -z "$(az ad sp list --filter "appId eq '$APP_ID'" --query '[0].id' -o tsv)" ]; then
   az ad sp create --id "$APP_ID" --query id -o tsv >/dev/null
@@ -72,4 +80,5 @@ Done. Use these in the README steps:
 export TENANT_ID=$TENANT_ID
 export APP_ID=$APP_ID
 export GROUP_ID=$GROUP_ID
+OBJECT_ID=$OBJECT_ID
 EOF
