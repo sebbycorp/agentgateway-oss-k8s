@@ -1,0 +1,36 @@
+# Optional: require a Microsoft Entra ID sign-in and membership of one group
+# for everything on the gateway (the LLM at /v1 and the MCP server at /mcp).
+#
+# Placeholders are filled in at apply time (see README, "Optional — Entra ID sign-in"):
+#   ${TENANT_ID}  Entra tenant ID
+#   ${APP_ID}     client ID of the app registration that represents the gateway
+#   ${GROUP_ID}   object ID of the group that is allowed in
+apiVersion: agentgateway.dev/v1alpha1
+kind: AgentgatewayPolicy
+metadata:
+  name: entra-auth
+  namespace: agentgateway-system
+spec:
+  targetRefs:
+  - group: gateway.networking.k8s.io
+    kind: Gateway
+    name: agentgateway-proxy
+  traffic:
+    # 1. Authentication: the request must carry a valid token issued by your
+    #    tenant for this app. Anything else gets 401.
+    jwtAuthentication:
+      mode: Strict
+      providers:
+      - issuer: https://login.microsoftonline.com/${TENANT_ID}/v2.0
+        audiences:
+        - ${APP_ID}
+        jwks:
+          remote:
+            url: https://login.microsoftonline.com/${TENANT_ID}/discovery/v2.0/keys
+    # 2. Authorization: the token's "groups" claim must contain the group.
+    #    Signed-in users outside the group get 403.
+    authorization:
+      action: Allow
+      policy:
+        matchExpressions:
+        - '"${GROUP_ID}" in jwt.groups'

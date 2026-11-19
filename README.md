@@ -45,6 +45,7 @@ Based on:
 | Model `gpt-oss-120b` (OpenAI on Bedrock) | manifest `k8s/02-model-bedrock-openai.yaml` | Step 7 |
 | MCP server `search.solo.io` at `/mcp` | manifest `k8s/05-mcp-solo-search.yaml` | Step 12 |
 | Codex profile | `~/.codex/agentgateway.config.toml` | Steps 10 and 12 |
+| *Optional:* Entra ID sign-in + group check | manifest `k8s/06-entra-auth.yaml` | [Optional section](#optional--entra-id-sign-in-only-the-codex-group-gets-in) |
 
 Secrets (`bedrock-secret`, `agentgateway-db`) are created from the command line and are not stored in
 this directory.
@@ -400,6 +401,241 @@ kubectl --context $CTX -n agentgateway-system exec agentgateway-db-0 -- \
   'select started_at, gen_ai_request_model, total_tokens, cost, user_agent_name from request_logs order by started_at desc limit 5'
 ```
 
+## Optional — Entra ID sign-in (only the `codex` group gets in)
+
+Skip this section if an open gateway on your laptop is fine. Do it if you want every request to carry a
+Microsoft Entra ID sign-in, and only members of one group to reach the model and the MCP server.
+
+How it works:
+
+```
+az login (you)                      Codex runs `az account get-access-token`
+      │                                          │  Authorization: Bearer <Entra token>
+      ▼                                          ▼
+Entra ID ── token with your group IDs ──►  agentgateway-proxy
+                                             1. valid token from my tenant, for my app?  no → 401
+                                             2. "codex" group ID in the token's groups?  no → 403
+                                             3. yes → Bedrock (/v1) and search.solo.io (/mcp)
+```
+
+This uses only OSS features: one `AgentgatewayPolicy` with `jwtAuthentication` and `authorization`.
+Codex does not open a browser itself — your `az login` session is the sign-in, and Codex asks the Azure
+CLI for a token whenever it needs one.
+
+You need the Azure CLI (`az`), signed in as a user who may create groups and app registrations:
+
+```sh
+az login
+export TENANT_ID=$(az account show --query tenantId -o tsv)
+```
+
+### A. Create the group and add yourself
+
+```sh
+export GROUP_ID=$(az ad group create --display-name codex --mail-nickname codex \
+  --description "Access to LLMs and MCP servers through agentgateway" --query id -o tsv)
+
+az ad group member add --group $GROUP_ID \
+  --member-id $(az ad signed-in-user show --query id -o tsv)
+```
+
+To use a group that already exists: `export GROUP_ID=$(az ad group show --group <name> --query id -o tsv)`.
+
+### B. Create the app registration that represents the gateway
+
+The gateway only accepts tokens issued *for this app*, so a token for some other API in your tenant
+does not work.
+
+```sh
+export APP_ID=$(az ad app create --display-name agentgateway-oss-codex \
+  --sign-in-audience AzureADMyOrg --query appId -o tsv)
+OBJECT_ID=$(az ad app show --id $APP_ID --query id -o tsv)
+
+# Application ID URI, and put the user's security groups in the token
+az ad app update --id $APP_ID --identifier-uris "api://$APP_ID" \
+  --set groupMembershipClaims=SecurityGroup
+
+# Expose one scope ("access") and issue v2.0 tokens
+SCOPE_ID=$(uuidgen | tr 'A-Z' 'a-z')
+az rest --method PATCH --uri "https://graph.microsoft.com/v1.0/applications/$OBJECT_ID" \
+  --headers 'Content-Type=application/json' --body "{
+    \"api\": {
+      \"requestedAccessTokenVersion\": 2,
+      \"oauth2PermissionScopes\": [{
+        \"id\": \"$SCOPE_ID\", \"value\": \"access\", \"type\": \"User\", \"isEnabled\": true,
+        \"adminConsentDisplayName\": \"Access agentgateway\",
+        \"adminConsentDescription\": \"Call LLMs and MCP servers through agentgateway\",
+        \"userConsentDisplayName\": \"Access agentgateway\",
+        \"userConsentDescription\": \"Call LLMs and MCP servers through agentgateway\"
+      }]
+    }
+  }"
+
+# Let the Azure CLI request that scope without a consent prompt
+# (04b07795-... is Microsoft's fixed client ID for the Azure CLI)
+az rest --method PATCH --uri "https://graph.microsoft.com/v1.0/applications/$OBJECT_ID" \
+  --headers 'Content-Type=application/json' --body "{
+    \"api\": { \"preAuthorizedApplications\": [{
+      \"appId\": \"04b07795-8ddb-461a-bbee-02f9e1bf7b46\", \"delegatedPermissionIds\": [\"$SCOPE_ID\"]
+    }] }
+  }"
+
+# The app needs a service principal in the tenant before tokens can be issued for it
+az ad sp create --id $APP_ID
+```
+
+The same thing in the portal: **Entra ID → App registrations → New registration**, then
+**Expose an API** (set the Application ID URI, add scope `access`, add the Azure CLI client ID under
+*Authorized client applications*), **Token configuration → Add groups claim → Security groups**, and
+**Manifest →** `"requestedAccessTokenVersion": 2`.
+
+Shortcut for A and B: [`scripts/entra-setup.sh`](scripts/entra-setup.sh) runs the same commands, reuses
+objects that already exist, and prints the three `export` lines.
+
+### C. Check the token
+
+It can take a minute after step B before Entra issues the token.
+
+```sh
+az account get-access-token --scope api://$APP_ID/.default --query accessToken -o tsv \
+  | cut -d. -f2 | python3 -c "
+import sys, base64, json
+p = sys.stdin.read().strip(); p += '=' * (-len(p) % 4)
+c = json.loads(base64.urlsafe_b64decode(p))
+print(json.dumps({k: c.get(k) for k in ['iss', 'aud', 'scp', 'groups']}, indent=2))"
+```
+
+Expect `iss` to end in `/<TENANT_ID>/v2.0`, `aud` to equal `$APP_ID`, and `groups` to contain `$GROUP_ID`.
+
+### D. Apply the policy
+
+[`k8s/06-entra-auth.yaml`](k8s/06-entra-auth.yaml) attaches to the Gateway, so it covers both `/v1` and
+`/mcp`. It holds three placeholders, filled in at apply time:
+
+```sh
+sed -e "s/\${TENANT_ID}/$TENANT_ID/g" -e "s/\${APP_ID}/$APP_ID/g" -e "s/\${GROUP_ID}/$GROUP_ID/g" \
+  k8s/06-entra-auth.yaml | kubectl --context $CTX apply -f -
+
+kubectl --context $CTX -n agentgateway-system get agentgatewaypolicy entra-auth \
+  -o jsonpath='{range .status.ancestors[*].conditions[*]}{.type}={.status}{"\n"}{end}'
+# Accepted=True
+# Attached=True
+```
+
+The two parts of the policy:
+
+```yaml
+traffic:
+  jwtAuthentication:            # who are you?  → 401 if the token is missing or invalid
+    mode: Strict
+    providers:
+    - issuer: https://login.microsoftonline.com/<TENANT_ID>/v2.0
+      audiences: [<APP_ID>]
+      jwks:
+        remote:
+          url: https://login.microsoftonline.com/<TENANT_ID>/discovery/v2.0/keys
+  authorization:                # are you allowed?  → 403 if not in the group
+    action: Allow
+    policy:
+      matchExpressions:
+      - '"<GROUP_ID>" in jwt.groups'
+```
+
+### E. Test with curl
+
+```sh
+BODY='{"model":"gpt-oss-120b","messages":[{"role":"user","content":"Say hi in 3 words"}]}'
+
+# no token → 401
+curl -s -o /dev/null -w "%{http_code}\n" "$INGRESS_GW_ADDRESS/v1/chat/completions" \
+  -H 'content-type: application/json' -d "$BODY"
+
+# with your token → 200
+TOKEN=$(az account get-access-token --scope api://$APP_ID/.default --query accessToken -o tsv)
+curl -s -o /dev/null -w "%{http_code}\n" "$INGRESS_GW_ADDRESS/v1/chat/completions" \
+  -H 'content-type: application/json' -H "Authorization: Bearer $TOKEN" -d "$BODY"
+```
+
+Results from this setup:
+
+| Request | LLM `/v1` | MCP `/mcp` |
+|---|---|---|
+| No token | 401 | 401 |
+| Garbage token | 401 | 401 |
+| Valid Entra token for a different API | 401 | — |
+| Valid token, user not in the group | 403 `authorization failed` | 403 |
+| Valid token, user in the group | 200 | 200 |
+
+### F. Update the Codex profile
+
+Rewrite the profile from Steps 10 and 12 so Codex fetches a token for both the model and the MCP server:
+
+```sh
+cat > ~/.codex/agentgateway.config.toml <<EOF
+model = "gpt-oss-120b"
+model_provider = "agentgateway"
+
+[model_providers.agentgateway]
+name = "OpenAI via agentgateway"
+base_url = "http://${INGRESS_GW_ADDRESS}/v1"
+wire_api = "responses"
+
+# Codex runs this to get a bearer token for the gateway (your az login is the sign-in).
+[model_providers.agentgateway.auth]
+command = "az"
+args = ["account", "get-access-token", "--scope", "api://${APP_ID}/.default", "--query", "accessToken", "-o", "tsv"]
+timeout_ms = 20000
+
+[mcp_servers.solo-search]
+url = "http://${INGRESS_GW_ADDRESS}/mcp"
+# Prints {"Authorization": "Bearer <token>"} for each MCP connection.
+http_headers_helper = '''az account get-access-token --scope api://${APP_ID}/.default --query "{Authorization: join(' ', ['Bearer', accessToken])}" -o json'''
+EOF
+
+codex exec --profile agentgateway --skip-git-repo-check \
+  "Use the solo-search MCP search tool to look up: AgentgatewayPolicy. Reply with the top result's title."
+```
+
+No token is stored in the file. Codex re-runs the command every 5 minutes; the Azure CLI caches and
+renews the token (about one hour lifetime) on its own. Tested with Codex CLI 0.170.0.
+
+Each request log row now records who made the call (`agentgateway_user` is the token's `sub` claim):
+
+```sh
+kubectl --context $CTX -n agentgateway-system exec agentgateway-db-0 -- \
+  psql -U agentgateway -d agentgateway -c \
+  'select started_at, http_status, agentgateway_user, total_tokens from request_logs order by started_at desc limit 5'
+```
+
+### Things to know about Entra sign-in
+
+- **Signed out = locked out.** After `az logout`, or when the session expires, Codex fails with an auth
+  error. Run `az login` again.
+- **Group changes take up to an hour.** Membership is read when the token is issued. After adding or
+  removing someone, they keep their old access until the cached token expires. To force a new token:
+  `az logout && az login`.
+- **More than 200 groups:** Entra leaves the `groups` claim out of the token for such users and the
+  policy answers 403. Fix: in the app's *Token configuration*, emit only *Groups assigned to the
+  application*, and assign the group to the app's enterprise application.
+- **Different access per route:** this policy targets the whole Gateway. To use a different group for the
+  MCP server, create a second policy with only `authorization` and a `targetRefs` entry of kind
+  `HTTPRoute`, name `solo-search-mcp`.
+- **Codex prints `failed to refresh available models`** at startup once auth is on. It is harmless —
+  requests still work.
+- **Traffic is still plain HTTP** between Codex and the gateway on your machine. The token is a bearer
+  credential; for anything beyond local use, put TLS on the listener.
+- **Browser-based MCP sign-in** (`codex mcp login` with the gateway's `jwtAuthentication.mcp` Entra
+  mode) is not covered here; the Azure CLI token approach above is what was tested.
+
+To turn it off again:
+
+```sh
+kubectl --context $CTX -n agentgateway-system delete agentgatewaypolicy entra-auth
+# then restore the profile from Steps 10 and 12
+az ad app delete --id $APP_ID        # optional
+az ad group delete --group $GROUP_ID # optional
+```
+
 ## Other models
 
 Also tested through this gateway, and not currently published:
@@ -415,11 +651,11 @@ transformation.
 
 ## Things to know
 
-- **The gateway is unauthenticated.** Anyone who can reach the port can use your Bedrock key. With
+- **The gateway is unauthenticated by default.** Anyone who can reach the port can use your Bedrock key. With
   `--enable-lb-port-mapping` the port is published on `0.0.0.0`, i.e. reachable from your LAN, not just
   localhost. Fine for a short local test; on an untrusted network, stop cloud-provider-kind when you are
-  done or use `kubectl port-forward` (next bullet), which binds to `127.0.0.1` only. For real use, add API-key
-  auth on the route and set `env_key = "AGENTGATEWAY_API_KEY"` in the Codex profile.
+  done or use `kubectl port-forward` (next bullet), which binds to `127.0.0.1` only. To require a sign-in,
+  do the [optional Entra ID section](#optional--entra-id-sign-in-only-the-codex-group-gets-in).
 - **Stable-port alternative:** skip cloud-provider-kind and run
   `kubectl --context $CTX port-forward deployment/agentgateway-proxy -n agentgateway-system 8080:80`,
   then use `INGRESS_GW_ADDRESS=localhost:8080`.
