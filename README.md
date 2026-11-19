@@ -4,7 +4,7 @@ Routes coding-agent traffic through [agentgateway](https://agentgateway.dev/docs
 
 | Client | Models (all on Amazon Bedrock) | Guide |
 |---|---|---|
-| OpenAI Codex CLI | `gpt-oss-120b`, `gpt-oss-20b`, `claude-haiku-4-5` | this page |
+| OpenAI Codex CLI | `gpt-oss-120b`, `gpt-oss-20b`, `claude-haiku-4-5` | [codex/README.md](codex/README.md) |
 | Claude Code | Claude Opus, Sonnet and Haiku 5.5 | [claude-code/README.md](claude-code/README.md) |
 
 ```
@@ -15,6 +15,9 @@ claude  (claude-agw profile) ─────┘   (no API key)          │
                                                             ├─ /mcp   ──► https://search.solo.io/mcp
                                                             └─ logs   ──► Postgres ──► UI Logs / Analytics
 ```
+
+This page builds the gateway. Each client guide then has two paths side by side: a script, and the same
+thing by hand.
 
 Optionally the gateway requires a Microsoft Entra ID sign-in and group membership
 ([Codex](entra-id/README.md), [Claude Code](claude-code/README.md#step-5--optional-entra-id-sign-in)).
@@ -55,11 +58,12 @@ Based on:
 | Gateway → proxy Deployment + LoadBalancer | manifest `k8s/01-gateway.yaml` | Step 6 |
 | Gateway on a fixed `localhost:8080` | `kind-config.yaml` + manifest `k8s/09-fixed-port.yaml` | Steps 1 and 6 |
 | Model `gpt-oss-120b` (OpenAI on Bedrock) | manifest `k8s/02-model-bedrock-openai.yaml` | Step 7 |
-| MCP server `search.solo.io` at `/mcp` | manifest `k8s/05-mcp-solo-search.yaml` | Step 12 |
-| Codex profile | `~/.codex/agentgateway.config.toml` | Steps 10 and 12 |
-| *Optional:* models `gpt-oss-20b` and `claude-haiku-4-5` | manifest `k8s/07-more-bedrock-models.yaml` | [Other models](#other-models) |
-| *Optional:* Claude Code with Claude Opus, Sonnet and Haiku 5.5 | manifest `k8s/08-claude-code-models.yaml` + profile `~/.claude-agentgateway` | [Separate guide](claude-code/README.md) |
-| *Optional:* Entra ID sign-in + group check | manifest `k8s/06-entra-auth.yaml` | [Optional section](entra-id/README.md) |
+| MCP server `search.solo.io` at `/mcp` | manifest `k8s/05-mcp-solo-search.yaml` | Step 10 |
+| Codex profile | `~/.codex/agentgateway.config.toml` | [codex/README.md](codex/README.md) |
+| *Optional:* models `gpt-oss-20b` and `claude-haiku-4-5` | manifest `k8s/07-more-bedrock-models.yaml` | Step 7 |
+| *Optional:* models Claude Opus, Sonnet and Haiku 5.5 | manifest `k8s/08-claude-code-models.yaml` | Step 7 |
+| Claude Code profile | `~/.claude-agentgateway` | [claude-code/README.md](claude-code/README.md) |
+| *Optional:* Entra ID sign-in + group check | manifest `k8s/06-entra-auth.yaml` | [Optional — Entra ID sign-in](#optional--entra-id-sign-in) |
 
 Secrets (`bedrock-secret`, `agentgateway-db`) are created from the command line and are not stored in
 this directory.
@@ -76,18 +80,21 @@ Every `kubectl`/`helm` command below pins the context so nothing lands on anothe
 export CTX=kind-agentgateway-codex
 ```
 
-## Quick start
+## Option A — Build it with the script
 
-One script runs Steps 1–8 and 12, with all models:
+One script runs Steps 1–8 and 10 below, with all models:
 
 ```sh
 export BEDROCK_API_KEY='<your Bedrock API key>'
 scripts/deploy.sh                       # gateway at http://localhost:8080
 ```
 
-Then set up a client: Step 10 for Codex, or
-[`scripts/claude-code-profile.sh`](claude-code/README.md#step-2--create-the-profile) for Claude Code.
-The script is safe to rerun. The steps below do the same thing by hand and explain each piece.
+The script is safe to rerun. When it finishes, test the gateway (Step 9), open the UI (Step 11) and
+[connect a client](#connect-a-client).
+
+## Option B — Build it by hand
+
+Steps 1–11 below do the same thing one command at a time and explain each piece.
 
 ## Step 1 — Create the kind cluster
 
@@ -233,8 +240,7 @@ Without cloud-provider-kind the `LoadBalancer` Service stays `<pending>`; that i
 ## Step 7 — Configure the model (OpenAI gpt-oss-120b on Bedrock)
 
 This step publishes one model: OpenAI's `gpt-oss-120b`, served by Amazon Bedrock. To add
-`gpt-oss-20b` and Claude Haiku 4.5 afterwards, see [Other models](#other-models). For the Claude 5.5
-models that Claude Code uses, see [claude-code/README.md](claude-code/README.md).
+more, see [More models](#more-models) at the end of this step.
 
 Store the Bedrock API key in a Secret. It is read from your environment and never written to a file:
 
@@ -263,6 +269,23 @@ How it works:
   `policies.auth.aws.secretRef` is for IAM access keys and fails with `accessKey is missing`.
 - **Region** is `spec.bedrock.region` (`us-east-2` here).
 
+### More models
+
+Two more manifests publish further Bedrock models. They use the same `bedrock-secret` and region:
+
+| Manifest | Models | Needed by |
+|---|---|---|
+| [`k8s/07-more-bedrock-models.yaml`](k8s/07-more-bedrock-models.yaml) | `gpt-oss-20b`, `claude-haiku-4-5` | Codex (optional) |
+| [`k8s/08-claude-code-models.yaml`](k8s/08-claude-code-models.yaml) | `claude-opus-5-5`, `claude-sonnet-5-5`, `claude-haiku-5-5` | Claude Code |
+
+```sh
+kubectl --context $CTX apply -f k8s/07-more-bedrock-models.yaml -f k8s/08-claude-code-models.yaml
+```
+
+To add another model, copy a block in one of these files and change `metadata.name` and the model ID in
+the transformation. OpenAI direct (`gpt-5.5`, `gpt-6.2-sol`) with `provider: OpenAI` and an
+`openai-secret` was also tested with Codex earlier and worked; it is not in a manifest here.
+
 ## Step 8 — Set the gateway address
 
 ```sh
@@ -288,64 +311,7 @@ curl -s "http://$INGRESS_GW_ADDRESS/v1/responses" -H content-type:application/js
 The same models also answer on `/v1/chat/completions` (OpenAI chat) and `/v1/messages` (Anthropic, used
 by Claude Code).
 
-## Step 10 — Point Codex at the gateway
-
-Create a Codex profile. This is a separate file, so your existing `~/.codex/config.toml` is untouched:
-
-```sh
-export AGENTGATEWAY_BASE_URL="http://${INGRESS_GW_ADDRESS}/v1"
-
-cat > ~/.codex/agentgateway.config.toml <<EOF
-model = "gpt-oss-120b"
-model_provider = "agentgateway"
-
-[model_providers.agentgateway]
-name = "OpenAI via agentgateway"
-base_url = "${AGENTGATEWAY_BASE_URL}"
-wire_api = "responses"
-EOF
-```
-
-- The `/v1` suffix is required — Codex posts to `<base_url>/responses`.
-- `wire_api = "responses"` is required — Codex uses the Responses API, not chat completions.
-- No `env_key` is set, so Codex sends no credential. The gateway supplies the Bedrock key.
-- `model` must be the name the gateway publishes.
-
-Run Codex with the profile:
-
-```sh
-codex --profile agentgateway                    # interactive
-codex exec --profile agentgateway "Hello"       # one-shot
-```
-
-One-off alternative without a profile file:
-
-```sh
-codex -c model_provider='"agentgateway"' \
-  -c model_providers.agentgateway.name='"OpenAI via agentgateway"' \
-  -c model_providers.agentgateway.base_url="\"${AGENTGATEWAY_BASE_URL}\"" \
-  -c model_providers.agentgateway.wire_api='"responses"'
-```
-
-## Step 11 — Verify Codex traffic goes through the gateway
-
-```sh
-codex exec --profile agentgateway --skip-git-repo-check "Reply with exactly: hello from agentgateway"
-
-kubectl --context $CTX logs deployment/agentgateway-proxy -n agentgateway-system --since=5m \
-  | grep 'http.path=/v1/responses' | tail -n 5
-```
-
-A successful entry looks like this (trimmed):
-
-```
-info request gateway=agentgateway-system/agentgateway-proxy route=internal/llm:request
-  endpoint=bedrock-runtime.us-east-2.amazonaws.com:443 http.method=POST http.path=/v1/responses
-  http.status=200 protocol=llm gen_ai.provider.name=aws.bedrock
-  gen_ai.request.model=openai.gpt-oss-120b-1:0 agw.ai.original_model=gpt-oss-120b
-```
-
-## Step 12 — Add an MCP server (Solo.io docs search)
+## Step 10 — Add an MCP server (Solo.io docs search)
 
 [`k8s/05-mcp-solo-search.yaml`](k8s/05-mcp-solo-search.yaml) exposes the remote MCP server
 `https://search.solo.io/mcp` on the gateway at `/mcp`: an `AgentgatewayBackend` with a static MCP target
@@ -367,18 +333,7 @@ curl -si -X POST "http://$INGRESS_GW_ADDRESS/mcp" \
 
 Tools exposed: `search`, `get_chunks`, `get_full_page`.
 
-Use it from Codex by appending it to the profile from Step 10:
-
-```sh
-cat >> ~/.codex/agentgateway.config.toml <<EOF
-
-[mcp_servers.solo-search]
-url = "http://${INGRESS_GW_ADDRESS}/mcp"
-EOF
-
-codex exec --profile agentgateway --skip-git-repo-check \
-  "Use the solo-search MCP search tool to look up: AgentgatewayModel. Summarize the top result."
-```
+The client guides add this server to Codex and Claude Code.
 
 What you can see for MCP in the UI on Kubernetes:
 
@@ -393,7 +348,7 @@ What you can see for MCP in the UI on Kubernetes:
     | grep 'protocol=mcp' | grep -o 'mcp.method.name=[^ ]*\|mcp.target=[^ ]*\|http.status=[0-9]*' | paste - - -
   ```
 
-## Step 13 — Open the UI (logs, analytics, costs)
+## Step 11 — Open the UI (logs, analytics, costs)
 
 The proxy serves a built-in admin UI on port `15000`. It listens on `127.0.0.1` inside the pod and is not
 exposed by any Service, so reach it with a port-forward (rerun it whenever the proxy pod is replaced):
@@ -441,6 +396,15 @@ kubectl --context $CTX -n agentgateway-system exec agentgateway-db-0 -- \
   'select started_at, gen_ai_request_model, total_tokens, cost, user_agent_name from request_logs order by started_at desc limit 5'
 ```
 
+## Connect a client
+
+| Client | Guide | Start it with |
+|---|---|---|
+| OpenAI Codex CLI | [codex/README.md](codex/README.md) | `codex --profile agentgateway` |
+| Claude Code | [claude-code/README.md](claude-code/README.md) | `claude-agw` |
+
+Both guides have a scripted path and a by-hand path. Both clients can use the gateway at the same time.
+
 ## Optional — Entra ID sign-in
 
 To require a Microsoft Entra ID sign-in before anyone can use the gateway, and to allow only members of
@@ -453,72 +417,12 @@ one group:
 
 ![Microsoft sign-in page that Codex opens](docs/screenshots/entra/signin.png)
 
-## Optional — Claude Code
-
-**[claude-code/README.md](claude-code/README.md)** runs Claude Code through the same gateway with Claude
-Opus, Sonnet and Haiku 5.5 on Bedrock. It uses its own configuration directory
-(`~/.claude-agentgateway`), so your normal Claude Code setup is untouched, and you start it with
-`claude-agw`.
-
-## Other models
-
-[`k8s/07-more-bedrock-models.yaml`](k8s/07-more-bedrock-models.yaml) publishes two more Bedrock models
-next to `gpt-oss-120b`. They use the same `bedrock-secret` and region:
-
-```sh
-kubectl --context $CTX apply -f k8s/07-more-bedrock-models.yaml
-codex --profile agentgateway -m claude-haiku-4-5      # or: -m gpt-oss-20b
-```
-
-| Name in Codex | Bedrock model | Result with Codex |
-|---|---|---|
-| `gpt-oss-120b` | `openai.gpt-oss-120b-1:0` | works: chat, shell commands, MCP tools |
-| `gpt-oss-20b` | `openai.gpt-oss-20b-1:0` | works: chat, shell commands, MCP tools. Sometimes prints its reasoning in front of the answer |
-| `claude-haiku-4-5` | `us.anthropic.claude-haiku-4-5-20251001-v1:0` | works: chat, shell commands, MCP tools, after the change below |
-
-**Claude models need two Codex tools turned off if you have the ChatGPT desktop app installed.** The app
-adds two JavaScript REPL tools to Codex (`cua_repl` from the `unified-computer-use` plugin, and
-`node_repl`). Their schemas use a top-level `oneOf`, which Claude on Bedrock rejects for the whole
-request:
-
-```
-HTTP 400: tools.12.custom.input_schema: input_schema does not support oneOf, allOf, or anyOf at the top level
-```
-
-Turn them off for the gateway profile only. Add each block only if `codex mcp list` shows that server,
-otherwise Codex refuses to load the profile:
-
-```sh
-cat >> ~/.codex/agentgateway.config.toml <<'EOF'
-
-# Claude on Bedrock rejects the schema of these two desktop-app tools.
-[plugins."unified-computer-use@openai-bundled"]
-enabled = false
-
-[mcp_servers.node_repl]
-enabled = false
-EOF
-```
-
-Any other MCP tool whose schema has `oneOf`, `anyOf` or `allOf` at the top level causes the same error
-with Claude models. The OpenAI models on Bedrock accept them.
-
-OpenAI direct (`gpt-5.5`, `gpt-6.2-sol`) with `provider: OpenAI` and an `openai-secret` was also tested
-with Codex earlier and worked; it is not in a manifest here.
-
-To add another model, copy a block in `k8s/07-more-bedrock-models.yaml` and change `metadata.name` and
-the model ID in the transformation.
-
 ## Things to know
 
 - **The gateway is unauthenticated by default.** Anyone who can reach the port can use your Bedrock key.
   The fixed port listens on `127.0.0.1` only, so that means programs on your machine. If you also run
   cloud-provider-kind with `--enable-lb-port-mapping`, it publishes a second port on `0.0.0.0`, reachable
   from your LAN. To require a sign-in, see [Optional — Entra ID sign-in](#optional--entra-id-sign-in).
-- **`codex exec` from a script** waits on stdin if it is not a TTY; add `</dev/null`.
-- **ChatGPT desktop app:** the docs cover this by replacing `~/.codex/config.toml`. Not done here, because
-  that file holds existing plugin/MCP settings. To do it, merge the four keys from Step 10 into that file
-  (back it up first) and restart the app.
 - **Rotating the key:**
   ```sh
   kubectl --context $CTX -n agentgateway-system create secret generic bedrock-secret \
@@ -529,7 +433,7 @@ the model ID in the transformation.
 ## Cleanup
 
 ```sh
-rm ~/.codex/agentgateway.config.toml
+rm -f ~/.codex/agentgateway.config.toml          # Codex profile, if you created it
 rm -rf ~/.claude-agentgateway                    # Claude Code profile, if you created it
 kind delete cluster --name agentgateway-codex    # also deletes the Postgres data
 

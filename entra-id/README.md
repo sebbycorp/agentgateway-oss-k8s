@@ -44,8 +44,9 @@ and the tenant, app and group IDs are filled into the manifest at apply time.
 
 ## Before you begin
 
-- The base setup works: Steps 1–13 of the [main README](../README.md) are done, and
-  `codex --profile agentgateway` reaches the model and the `solo-search` MCP server.
+- The base setup works: the gateway from the [main README](../README.md) is built, and with the
+  profile from [codex/README.md](../codex/README.md) `codex --profile agentgateway` reaches the model
+  and the `solo-search` MCP server.
 - These variables from the main guide are set in your shell:
 
   ```sh
@@ -255,7 +256,7 @@ The "group not matching" row was tested by pointing the policy at a group ID tha
 
 ## Step 6 — Update the Codex profile
 
-Rewrite the profile from the main guide. The `gateway_oauth` table tells Codex where to sign you in:
+Rewrite the profile from the [Codex guide](../codex/README.md) (`TENANT_ID=$TENANT_ID APP_ID=$APP_ID scripts/codex-profile.sh` does the same). The `gateway_oauth` table tells Codex where to sign you in:
 
 ```sh
 cat > ~/.codex/agentgateway.config.toml <<EOF
@@ -281,7 +282,7 @@ EOF
 ```
 
 No token or secret goes in this file. If you added the two blocks that make Claude models work
-(see [Other models](../README.md#other-models)), add them again at the end, because this command
+(see [Other models](../codex/README.md#other-models)), add them again at the end, because this command
 replaces the file.
 
 ## Step 7 — Sign in for the model
@@ -456,7 +457,7 @@ kubectl --context $CTX -n agentgateway-system delete agentgatewaypolicy entra-au
 kubectl --context $CTX -n agentgateway-system patch agentgatewayparameters agentgateway-proxy-params \
   --type json -p '[{"op":"remove","path":"/spec/rawConfig/config/standardAttributes"}]'
 
-# restore the profile from Steps 10 and 12 of the main README, and remove the alias from ~/.zshrc
+# restore the profile (codex/README.md, or scripts/codex-profile.sh), and remove the alias from ~/.zshrc
 rm -f ~/.codex/secrets/gateway_oauth.age
 codex --profile agentgateway mcp logout solo-search
 
