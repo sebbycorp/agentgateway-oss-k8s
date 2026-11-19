@@ -1,0 +1,23 @@
+# The one published model: OpenAI gpt-oss-120b, served by Amazon Bedrock.
+# Clients ask for "gpt-oss-120b"; Bedrock receives "openai.gpt-oss-120b-1:0".
+apiVersion: agentgateway.dev/v1alpha1
+kind: AgentgatewayModel
+metadata:
+  name: gpt-oss-120b
+  namespace: agentgateway-system
+spec:
+  parentRefs:
+  - group: gateway.networking.k8s.io
+    kind: Gateway
+    name: agentgateway-proxy
+    sectionName: http
+  provider: Bedrock
+  bedrock:
+    region: us-east-2
+  policies:
+    auth:
+      secretRef:              # Bedrock API key, sent as a bearer token
+        name: bedrock-secret
+    transformations:
+    - field: model
+      expression: '"openai.gpt-oss-120b-1:0"'

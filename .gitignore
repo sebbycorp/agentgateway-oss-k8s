@@ -1,0 +1,9 @@
+# Never commit credentials or local state
+.env
+.env.*
+*.key
+*.pem
+*kubeconfig*
+*secret*.yaml
+*.rendered.yaml
+.DS_Store

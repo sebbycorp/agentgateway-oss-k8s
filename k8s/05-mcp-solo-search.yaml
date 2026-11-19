@@ -1,0 +1,36 @@
+# Remote MCP server: Solo.io docs search (https://search.solo.io/mcp), exposed on the gateway at /mcp.
+apiVersion: agentgateway.dev/v1alpha1
+kind: AgentgatewayBackend
+metadata:
+  name: solo-search-mcp
+  namespace: agentgateway-system
+spec:
+  mcp:
+    targets:
+    - name: solo-search
+      static:
+        host: search.solo.io
+        port: 443
+        path: /mcp
+        policies:
+          tls:
+            sni: search.solo.io
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: solo-search-mcp
+  namespace: agentgateway-system
+spec:
+  parentRefs:
+  - name: agentgateway-proxy
+    namespace: agentgateway-system
+  rules:
+  - matches:
+    - path:
+        type: PathPrefix
+        value: /mcp
+    backendRefs:
+    - name: solo-search-mcp
+      group: agentgateway.dev
+      kind: AgentgatewayBackend

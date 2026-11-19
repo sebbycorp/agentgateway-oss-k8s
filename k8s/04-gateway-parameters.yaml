@@ -1,0 +1,13 @@
+# Points the proxy at the request-log database. ${PG_PASSWORD} is a placeholder so the
+# password stays out of this file. Substitute it at apply time (see README, Step 5):
+#   sed "s/\${PG_PASSWORD}/$PG_PASSWORD/" k8s/04-gateway-parameters.yaml | kubectl apply -f -
+apiVersion: agentgateway.dev/v1alpha1
+kind: AgentgatewayParameters
+metadata:
+  name: agentgateway-proxy-params
+  namespace: agentgateway-system
+spec:
+  rawConfig:
+    config:
+      database:
+        url: "postgres://agentgateway:${PG_PASSWORD}@agentgateway-db.agentgateway-system.svc.cluster.local:5432/agentgateway"

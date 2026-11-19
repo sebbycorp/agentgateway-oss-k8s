@@ -1,0 +1,68 @@
+# Postgres for agentgateway's request-log database (UI Logs / Analytics / Costs pages).
+# Credentials come from the "agentgateway-db" Secret (created separately, see README).
+apiVersion: v1
+kind: Service
+metadata:
+  name: agentgateway-db
+  namespace: agentgateway-system
+spec:
+  clusterIP: None
+  selector:
+    app: agentgateway-db
+  ports:
+  - name: postgres
+    port: 5432
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: agentgateway-db
+  namespace: agentgateway-system
+spec:
+  serviceName: agentgateway-db
+  replicas: 1
+  selector:
+    matchLabels:
+      app: agentgateway-db
+  template:
+    metadata:
+      labels:
+        app: agentgateway-db
+    spec:
+      containers:
+      - name: postgres
+        image: postgres:17
+        ports:
+        - containerPort: 5432
+          name: postgres
+        env:
+        - name: POSTGRES_DB
+          value: agentgateway
+        - name: POSTGRES_USER
+          value: agentgateway
+        - name: POSTGRES_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: agentgateway-db
+              key: password
+        - name: PGDATA
+          value: /var/lib/postgresql/data/pgdata
+        readinessProbe:
+          exec:
+            command: ["pg_isready", "-U", "agentgateway", "-d", "agentgateway"]
+          periodSeconds: 5
+        resources:
+          requests:
+            cpu: 100m
+            memory: 256Mi
+        volumeMounts:
+        - name: data
+          mountPath: /var/lib/postgresql/data
+  volumeClaimTemplates:
+  - metadata:
+      name: data
+    spec:
+      accessModes: ["ReadWriteOnce"]
+      resources:
+        requests:
+          storage: 5Gi
