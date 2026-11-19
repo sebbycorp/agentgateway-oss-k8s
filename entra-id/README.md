@@ -19,6 +19,9 @@ Entra ID ── token with your group IDs ──► Codex ── Authorization: 
                                                      3. yes → Bedrock (/v1) and search.solo.io (/mcp)
 ```
 
+For Claude Code instead of Codex, do Steps 1–3 here and then follow
+[claude-code/README.md](../claude-code/README.md#step-5--optional-entra-id-sign-in).
+
 Everything here is open source agentgateway (v1.7.0): `AgentgatewayPolicy` with `jwtAuthentication` and
 `authorization`. On the client side it uses two features built into Codex CLI (tested with 0.170.0):
 gateway OAuth for the model provider, and MCP OAuth for the MCP server. Codex stores and refreshes the

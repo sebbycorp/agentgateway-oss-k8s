@@ -1,0 +1,70 @@
+# Claude models on Amazon Bedrock, published under the model IDs Claude Code asks for.
+# Claude Code sends e.g. "claude-sonnet-5-5"; Bedrock receives "us.anthropic.claude-sonnet-5-5".
+# They reuse the same bedrock-secret and region as k8s/02-model-bedrock-openai.yaml.
+# See claude-code/README.md.
+---
+apiVersion: agentgateway.dev/v1alpha1
+kind: AgentgatewayModel
+metadata:
+  name: claude-opus-5-5
+  namespace: agentgateway-system
+spec:
+  parentRefs:
+  - group: gateway.networking.k8s.io
+    kind: Gateway
+    name: agentgateway-proxy
+    sectionName: http
+  provider: Bedrock
+  bedrock:
+    region: us-east-2
+  policies:
+    auth:
+      secretRef:              # Bedrock API key, sent as a bearer token
+        name: bedrock-secret
+    transformations:
+    - field: model
+      expression: '"us.anthropic.claude-opus-5-5"'
+---
+apiVersion: agentgateway.dev/v1alpha1
+kind: AgentgatewayModel
+metadata:
+  name: claude-sonnet-5-5
+  namespace: agentgateway-system
+spec:
+  parentRefs:
+  - group: gateway.networking.k8s.io
+    kind: Gateway
+    name: agentgateway-proxy
+    sectionName: http
+  provider: Bedrock
+  bedrock:
+    region: us-east-2
+  policies:
+    auth:
+      secretRef:              # Bedrock API key, sent as a bearer token
+        name: bedrock-secret
+    transformations:
+    - field: model
+      expression: '"us.anthropic.claude-sonnet-5-5"'
+---
+apiVersion: agentgateway.dev/v1alpha1
+kind: AgentgatewayModel
+metadata:
+  name: claude-haiku-5-5
+  namespace: agentgateway-system
+spec:
+  parentRefs:
+  - group: gateway.networking.k8s.io
+    kind: Gateway
+    name: agentgateway-proxy
+    sectionName: http
+  provider: Bedrock
+  bedrock:
+    region: us-east-2
+  policies:
+    auth:
+      secretRef:              # Bedrock API key, sent as a bearer token
+        name: bedrock-secret
+    transformations:
+    - field: model
+      expression: '"us.anthropic.claude-haiku-5-5"'

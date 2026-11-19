@@ -1,0 +1,13 @@
+# kind cluster with the gateway on a fixed local port.
+# localhost:8080 on your machine -> port 30080 on the node -> agentgateway-proxy
+# (the NodePort Service is k8s/09-fixed-port.yaml). 127.0.0.1 only: not reachable from your LAN.
+# With this, cloud-provider-kind is not needed.
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+nodes:
+- role: control-plane
+  extraPortMappings:
+  - containerPort: 30080
+    hostPort: 8080
+    listenAddress: "127.0.0.1"
+    protocol: TCP

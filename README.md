@@ -46,6 +46,7 @@ Based on:
 | MCP server `search.solo.io` at `/mcp` | manifest `k8s/05-mcp-solo-search.yaml` | Step 12 |
 | Codex profile | `~/.codex/agentgateway.config.toml` | Steps 10 and 12 |
 | *Optional:* models `gpt-oss-20b` and `claude-haiku-4-5` | manifest `k8s/07-more-bedrock-models.yaml` | [Other models](#other-models) |
+| *Optional:* Claude Code with Claude Opus, Sonnet and Haiku 5.5 | manifest `k8s/08-claude-code-models.yaml` + profile `~/.claude-agentgateway` | [Separate guide](claude-code/README.md) |
 | *Optional:* Entra ID sign-in + group check | manifest `k8s/06-entra-auth.yaml` | [Optional section](entra-id/README.md) |
 
 Secrets (`bedrock-secret`, `agentgateway-db`) are created from the command line and are not stored in
@@ -416,6 +417,12 @@ and the MCP server, and showing the signed-in user in the logs.
 
 ![Microsoft sign-in page that Codex opens](docs/screenshots/entra/signin.png)
 
+## Optional — Claude Code
+
+To run Claude Code through the same gateway with Claude Opus, Sonnet and Haiku 5.5 on Bedrock, using
+its own isolated configuration directory and (optionally) Entra ID sign-in, follow the separate guide:
+**[claude-code/README.md](claude-code/README.md)**. It also has a one-command deploy on a fixed port.
+
 ## Other models
 
 [`k8s/07-more-bedrock-models.yaml`](k8s/07-more-bedrock-models.yaml) publishes two more Bedrock models
@@ -472,9 +479,10 @@ the model ID in the transformation.
   localhost. Fine for a short local test; on an untrusted network, stop cloud-provider-kind when you are
   done or use `kubectl port-forward` (next bullet), which binds to `127.0.0.1` only. To require a sign-in,
   do the [optional Entra ID section](entra-id/README.md).
-- **Stable-port alternative:** skip cloud-provider-kind and run
-  `kubectl --context $CTX port-forward deployment/agentgateway-proxy -n agentgateway-system 8080:80`,
-  then use `INGRESS_GW_ADDRESS=localhost:8080`.
+- **Fixed-port alternative:** create the cluster with `kind create cluster --name agentgateway-codex --config kind-config.yaml`
+  and apply `k8s/09-fixed-port.yaml`. The gateway is then always at `localhost:8080`, on `127.0.0.1`
+  only, and cloud-provider-kind (Step 2) is not needed. `scripts/deploy.sh` builds the whole setup this
+  way; see [claude-code/README.md](claude-code/README.md).
 - **`codex exec` from a script** waits on stdin if it is not a TTY; add `</dev/null`.
 - **ChatGPT desktop app:** the docs cover this by replacing `~/.codex/config.toml`. Not done here, because
   that file holds existing plugin/MCP settings. To do it, merge the four keys from Step 10 into that file

@@ -1,0 +1,18 @@
+# Publishes the proxy on node port 30080, which kind-config.yaml maps to localhost:8080.
+# The LoadBalancer Service the controller creates stays; this one sits next to it.
+apiVersion: v1
+kind: Service
+metadata:
+  name: agentgateway-proxy-local
+  namespace: agentgateway-system
+spec:
+  type: NodePort
+  selector:
+    app.kubernetes.io/instance: agentgateway-proxy
+    app.kubernetes.io/name: agentgateway-proxy
+    gateway.networking.k8s.io/gateway-name: agentgateway-proxy
+  ports:
+  - name: http
+    port: 80
+    targetPort: 80
+    nodePort: 30080
